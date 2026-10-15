@@ -65,7 +65,8 @@ defmodule Rho.Dyn.Check do
   caught too.
 
   The lists are a host seam (`config :rho, :dyn, check: [...]`, merged over
-  `defaults/0`, which are Operator's; see `Rho.Dyn.Config`).
+  `defaults/0`: Operator's lists minus the entries naming Operator's own
+  code; see `Rho.Dyn.Config`).
   """
 
   alias Rho.Dyn.Config

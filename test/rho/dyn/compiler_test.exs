@@ -21,6 +21,36 @@ defmodule Rho.Dyn.CompilerTest do
     load("defmodule #{inspect(module)} do\n  def version, do: #{version}\nend\n")
   end
 
+  describe "rewrite/2 in templates (namespace TestHost.Dyn, generation 3)" do
+    defp in_template(text) do
+      [sigil | _] = Check.sigils()
+
+      {^sigil, _, [{:<<>>, _, [out]}, _]} =
+        Compiler.rewrite({sigil, [], [{:<<>>, [], [text]}, []]}, 3)
+
+      out
+    end
+
+    test "versions the namespace where a module follows it, as Operator's \\bOperator\\.Dyn\\. did" do
+      for {text, expected} <- [
+            {"<TestHost.Dyn.Card/>", "<TestHost.Dyn.G3.Card/>"},
+            {"{TestHost.Dyn.Util.f()}", "{TestHost.Dyn.G3.Util.f()}"},
+            # Prefixes that name the same module stay.
+            {"Elixir.TestHost.Dyn.X", "Elixir.TestHost.Dyn.G3.X"},
+            {"Inspect.TestHost.Dyn.X", "Inspect.TestHost.Dyn.G3.X"},
+            # Prose, and names that only start like the namespace, are left alone.
+            {"built with TestHost.Dyn.", "built with TestHost.Dyn."},
+            {"TestHost.Dynamo.X", "TestHost.Dynamo.X"},
+            {"MyTestHost.Dyn.X", "MyTestHost.Dyn.X"},
+            # The trade-off of keeping Inspect./Elixir. prefixes: another
+            # module whose name ends in the namespace is versioned too.
+            {"Other.TestHost.Dyn.X", "Other.TestHost.Dyn.G3.X"}
+          ] do
+        assert in_template(text) == expected, "rewriting #{inspect(text)}"
+      end
+    end
+  end
+
   test "the Core digest follows the Core code the VM runs, not Dyn generations' code" do
     on_exit(fn -> Enum.each([TestHost.DigestProbe, TestHost.Dyn.G999.DigestProbe], &unload/1) end)
     before = Compiler.core_digest()
