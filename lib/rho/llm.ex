@@ -9,7 +9,9 @@ defmodule Rho.LLM do
 
     * events: `{:text, delta}`, `{:thinking, delta}`
     * `{:ok, %{text:, thinking:, tool_calls: [%{"id", "name", "arguments"}],
-       usage: map | nil, finish_reason: atom}}`
+       usage: map | nil, finish_reason: atom}}`, and optionally `images:
+       [{mime_type, bytes}]`, pictures the model made (`Rho.Session.assistant/2`
+       keeps them in the session; they aren't sent back to the model)
     * `{:error, error}` where `error` is normalized: `{:http, status, message}`,
       `{:rate_limited, limit}` (a 429, or a 529 overloaded, with what the
       response and `Rho.Usage` say about when it lifts: see
@@ -59,11 +61,12 @@ defmodule Rho.LLM do
           | {:auth, Rho.Auth.provider(), String.t()}
           | {:other, String.t()}
   @type reply :: %{
-          text: String.t(),
-          thinking: String.t(),
-          tool_calls: [map()],
-          usage: map() | nil,
-          finish_reason: atom() | nil
+          required(:text) => String.t(),
+          required(:thinking) => String.t(),
+          required(:tool_calls) => [map()],
+          required(:usage) => map() | nil,
+          required(:finish_reason) => atom() | nil,
+          optional(:images) => [{String.t(), binary()}]
         }
 
   @callback stream(request(), opts :: term(), sink :: (term() -> any())) ::

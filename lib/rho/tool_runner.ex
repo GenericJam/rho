@@ -19,9 +19,10 @@ defmodule Rho.ToolRunner do
   And with data for the host's screens beside what the model reads (pi's
   tool result `details`): `{:ok, {:details, output, details}}`, where
   `output` is any of the above. The model and the session get `output`;
-  `details` goes only to the loop's subscribers, with
-  `tool_execution_end` (`Rho.Events`), so a screen can draw the answer
-  (a passage, a table) without parsing the text.
+  `details` goes to the loop's subscribers, with `tool_execution_end`
+  (`Rho.Events`), so a screen can draw the answer (a passage, a table)
+  without parsing the text, and into the session only as far as the
+  host's `:keep_details` (`Rho.Loop`) keeps it.
   """
 
   alias Rho.Tool

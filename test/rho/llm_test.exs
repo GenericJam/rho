@@ -1,6 +1,10 @@
 defmodule Rho.LLMTest do
   use ExUnit.Case, async: true
 
+  alias ReqLLM.Message.ContentPart
+  alias ReqLLM.StreamChunk
+  alias ReqLLM.StreamResponse
+  alias ReqLLM.StreamResponse.MetadataHandle
   alias Rho.LLM
   alias Rho.LLM.ReqLLM, as: Adapter
 
@@ -28,6 +32,36 @@ defmodule Rho.LLMTest do
     assert LLM.retryable?(Adapter.normalize(:timeout))
     assert LLM.retryable?(Adapter.normalize({:timeout, {GenServer, :call, []}}))
     refute LLM.retryable?(Adapter.normalize(:something_else))
+  end
+
+  test "pictures the model streams come back once as the reply's images; previews and links don't" do
+    png = <<137, 80, 78, 71, 1>>
+    jpeg = <<0xFF, 0xD8, 0xFF, 0xD9>>
+
+    chunks = [
+      StreamChunk.text("A fox:"),
+      StreamChunk.content_part(ContentPart.image(<<0>>, "image/png"), %{stream_only?: true}),
+      StreamChunk.content_part(ContentPart.image(png, "image/png")),
+      StreamChunk.content_part(%ContentPart{type: :image_url, url: "https://example.com/a.png"}),
+      StreamChunk.content_part(ContentPart.image(jpeg, "image/jpeg"))
+    ]
+
+    {:ok, model} = ReqLLM.model("google:gemini-2.5-flash")
+    {:ok, handle} = MetadataHandle.start_link(fn -> %{finish_reason: :stop} end)
+
+    stream = %StreamResponse{
+      stream: chunks,
+      metadata_handle: handle,
+      cancel: fn -> :ok end,
+      model: model,
+      context: ReqLLM.Context.new([ReqLLM.Context.user("draw")])
+    }
+
+    {:ok, response} = StreamResponse.process_stream(stream)
+    reply = Adapter.reply(response)
+
+    assert reply.text == "A fox:"
+    assert reply.images == [{"image/png", png}, {"image/jpeg", jpeg}]
   end
 
   describe "req_llm options per model prefix" do

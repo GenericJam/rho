@@ -158,6 +158,104 @@ defmodule Rho.LoopTest do
     refute Map.has_key?(result, "details")
   end
 
+  defp tool_result_messages(path) do
+    {:ok, _session, entries} = Session.open(path, model())
+    for %{"message" => %{"role" => "toolResult"} = m} <- entries, do: m
+  end
+
+  test "keep_details stores the host's part of a tool's details in its result entry",
+       %{tmp_dir: dir} do
+    script = [
+      [{:tool_call, "c1", "details", %{}}, {:tool_call, "c2", "echo", %{}}],
+      [{:text, "ok"}]
+    ]
+
+    tools = [Rho.Test.Tools.Details, Rho.Test.Tools.Echo]
+    test = self()
+
+    keep = fn name, details ->
+      send(test, {:kept, name})
+      %{first: hd(details.verses)}
+    end
+
+    %{loop: loop, llm: llm, session: session} =
+      start_loop(dir, script, tools: tools, keep_details: keep)
+
+    :ok = Loop.prompt(loop, "look")
+    events = collect()
+
+    # Called for the tool that answered with details only; the event still has them whole.
+    assert_received {:kept, "details"}
+    refute_received {:kept, "echo"}
+
+    assert [%{verses: [1, 2]}] =
+             for(%{type: :tool_execution_end, name: "details"} = e <- events, do: e.details)
+
+    assert [%{"details" => %{"first" => 1}} = kept, echo] = tool_result_messages(session.path)
+    assert kept["toolName"] == "details"
+    refute Map.has_key?(echo, "details")
+
+    # The entry the subscribers got is the one on disk.
+    assert [%{"details" => %{"first" => 1}}] =
+             for(
+               %{type: :message_end, entry: %{"message" => %{"role" => "toolResult"} = m}} <-
+                 events,
+               m["toolName"] == "details",
+               do: m
+             )
+
+    [_, second] = FakeLLM.requests(llm)
+    refute inspect(second.messages) =~ "first"
+  end
+
+  test "a keep_details that raises, or keeps what JSON can't hold, stores nothing",
+       %{tmp_dir: dir} do
+    for keep <- [fn _name, _details -> raise "boom" end, fn _name, _details -> {:a, self()} end] do
+      sub = Path.join(dir, inspect(make_ref()))
+      script = [[{:tool_call, "c1", "details", %{}}], [{:text, "ok"}]]
+
+      %{loop: loop, session: session} =
+        start_loop(sub, script, tools: [Rho.Test.Tools.Details], keep_details: keep)
+
+      :ok = Loop.prompt(loop, "look")
+      assert List.last(collect()) == %{type: :agent_end, reason: :done}
+      assert [result] = tool_result_messages(session.path)
+      assert Session.text(result["content"]) == "two verses"
+      refute Map.has_key?(result, "details")
+    end
+  end
+
+  test "pictures in the model's reply land in its assistant entry, after the text",
+       %{tmp_dir: dir} do
+    png = <<137, 80, 78, 71, 13, 10>>
+    script = [[{:text, "A fox:"}, {:image, "image/png", png}], [{:text, "again"}]]
+    %{loop: loop, llm: llm, session: session} = start_loop(dir, script)
+    :ok = Loop.prompt(loop, "draw a fox")
+    events = collect()
+
+    assert [%{"content" => content}] =
+             for(
+               %{type: :message_end, entry: %{"message" => %{"role" => "assistant"} = m}} <-
+                 events,
+               do: m
+             )
+
+    assert [%{"type" => "text", "text" => "A fox:"}, %{"type" => "image"} = image] = content
+    assert image["mimeType"] == "image/png"
+    assert Base.decode64!(image["data"]) == png
+
+    {:ok, _session, entries} = Session.open(session.path, model())
+    assert List.last(entries)["message"]["content"] == content
+
+    # The next call sends the turn back as text only.
+    :ok = Loop.prompt(loop, "another")
+    collect()
+    [_, second] = FakeLLM.requests(llm)
+    assert [_user, %{role: :assistant} = sent, _again] = second.messages
+    assert text_of(sent) == "A fox:"
+    assert Enum.all?(sent.content, &(&1.type == :text))
+  end
+
   describe "attachments" do
     defp photo do
       %{

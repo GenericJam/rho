@@ -10,8 +10,9 @@ defmodule Rho.Session do
 
     * `model_change` (`model` as `"provider/modelId"`), first, and on a switch
     * `message` with pi's `AgentMessage` in `message`: `user`, `assistant`
-      (text / thinking / toolCall content, `api`, `provider`, `model`,
-      `usage`, `stopReason`, `errorMessage`), `toolResult`
+      (text / thinking / image / toolCall content, `api`, `provider`,
+      `model`, `usage`, `stopReason`, `errorMessage`), `toolResult` (with
+      pi's `details` when the host keeps some, `tool_result/6`)
     * `custom_message` (`customType` `"<ns>.notice"` / `"<ns>.error"` /
       `"<ns>.aside"`, `<ns>` being `Rho.Config.namespace/0`, `content`,
       `display`) for loop notices
@@ -243,11 +244,7 @@ defmodule Rho.Session do
       ~s|<attachment name="#{attr(a.name)}" type="#{attr(a.mime)}" path="#{attr(a.path)}">\n| <>
         Enum.join(body, "\n") <> "\n</attachment>"
 
-    image =
-      case a[:image] do
-        {mime, data} -> [%{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}]
-        nil -> []
-      end
+    image = if a[:image], do: [image_part(a.image)], else: []
 
     [text_part(envelope) | image]
   end
@@ -270,7 +267,10 @@ defmodule Rho.Session do
   An assistant message. `reply` has `:text`, `:thinking`, `:tool_calls`
   (`[%{"id", "name", "arguments"}]`), `:usage` (req_llm's usage map or nil),
   `:stop_reason` (pi's: `"stop" | "length" | "toolUse" | "error" |
-  "aborted"`) and optionally `:error`.
+  "aborted"`) and optionally `:error` and `:images` (`{mime_type, bytes}`
+  each, pictures the model made), which go in as pi's image parts after
+  the text, before the tool calls. They stay in the session for the chat;
+  `messages/2` doesn't send them back to the model.
   """
   @spec assistant(map(), String.t()) :: entry()
   def assistant(reply, model) do
@@ -280,7 +280,8 @@ defmodule Rho.Session do
       [
         reply[:thinking] not in [nil, ""] && %{"type" => "thinking", "thinking" => reply.thinking},
         reply[:text] not in [nil, ""] && text_part(reply.text)
-        | for(c <- reply[:tool_calls] || [], do: Map.put(c, "type", "toolCall"))
+        | Enum.map(reply[:images] || [], &image_part/1) ++
+            for(c <- reply[:tool_calls] || [], do: Map.put(c, "type", "toolCall"))
       ]
       |> Enum.filter(& &1)
 
@@ -302,26 +303,30 @@ defmodule Rho.Session do
   @doc """
   A tool's result. `images` (`{mime_type, bytes}` each, a screenshot or
   photos) go in as pi's image content parts, after the text, and on to the
-  model.
+  model. `details` (JSON-encodable; nil for none) is stored as the
+  message's `details` (pi's `ToolResultMessage.details`): data for the
+  host's screens, never sent to the model.
   """
-  @spec tool_result(String.t(), String.t(), String.t(), boolean(), [{String.t(), binary()}]) ::
-          entry()
-  def tool_result(call_id, name, text, is_error, images \\ []) do
-    images =
-      for {mime, data} <- images,
-          do: %{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}
-
-    %{
-      "type" => "message",
-      "message" => %{
-        "role" => "toolResult",
-        "toolCallId" => call_id,
-        "toolName" => name,
-        "content" => [text_part(text) | images],
-        "isError" => is_error,
-        "timestamp" => now_ms()
-      }
+  @spec tool_result(
+          String.t(),
+          String.t(),
+          String.t(),
+          boolean(),
+          [{String.t(), binary()}],
+          term()
+        ) :: entry()
+  def tool_result(call_id, name, text, is_error, images \\ [], details \\ nil) do
+    message = %{
+      "role" => "toolResult",
+      "toolCallId" => call_id,
+      "toolName" => name,
+      "content" => [text_part(text) | Enum.map(images, &image_part/1)],
+      "isError" => is_error,
+      "timestamp" => now_ms()
     }
+
+    message = if details == nil, do: message, else: Map.put(message, "details", details)
+    %{"type" => "message", "message" => message}
   end
 
   @doc """
@@ -872,6 +877,9 @@ defmodule Rho.Session do
   defp num(_), do: 0
 
   defp text_part(text), do: %{"type" => "text", "text" => text}
+
+  defp image_part({mime, data}),
+    do: %{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}
 
   defp short_id, do: Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
 

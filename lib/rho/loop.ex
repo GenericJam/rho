@@ -68,6 +68,17 @@ defmodule Rho.Loop do
   loop's pid and the names in `:withhold_tools`, besides
   `Rho.Tool`'s three.
 
+  A tool that answers with details (`{:ok, {:details, output, details}}`,
+  `Rho.ToolRunner`) has them sent raw to the subscribers with
+  `tool_execution_end`; what goes in the session is the host's choice,
+  `:keep_details` (`fn tool_name, details -> kept | nil end`, called in
+  this process, so keep it quick): its non-nil answer is stored as the
+  toolResult entry's `details` (pi's), for a screen drawing the session
+  later. The default keeps nothing. A keep function that raises or keeps
+  something JSON can't encode is logged and nothing is stored. Pictures
+  the model makes (the reply's `:images`, `Rho.LLM`) go in the
+  assistant entry, as pi's image parts.
+
   Everything is persisted to the session as it happens
   (`Rho.Session`, omp/pi's JSONL).
   """
@@ -108,7 +119,8 @@ defmodule Rho.Loop do
     rate_limit_cap_ms: 60_000,
     rate_limit_budget_ms: 300_000,
     fallback_model: :settings,
-    fallback_check: &LLM.usable/1
+    fallback_check: &LLM.usable/1,
+    keep_details: nil
   ]
 
   # Open todo items the reminder names; the rest it counts.
@@ -122,7 +134,9 @@ defmodule Rho.Loop do
   `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:withhold_tools` (tool names never offered nor run: `task`
   withholds itself from its subagents), `:before_tool_call` (`fn call,
-  ctx -> :allow | {:block, reason} end`), `:task_supervisor`, `:budget`
+  ctx -> :allow | {:block, reason} end`), `:keep_details` (`fn tool_name,
+  details -> term() | nil end`: the part of a tool's details stored in its
+  result entry; nil, the default, stores none), `:task_supervisor`, `:budget`
   (the data dir holding the cost ledger and cap; nil means no cap),
   `:inputs` (what the model takes, for attachments and tool pictures;
   default `Rho.Models.inputs/1` of the session's model), and the
@@ -1038,16 +1052,51 @@ defmodule Rho.Loop do
       details: details
     })
 
+    kept = keep_details(s.opts.keep_details, call["name"], details)
+
     s
     |> update_batch(
       &%{
         &1
         | running: Map.delete(&1.running, ref),
-          results: Map.put(&1.results, i, {text, is_error, images})
+          results: Map.put(&1.results, i, {text, is_error, images, kept})
       }
     )
     |> then(&if(&1.run.stopping, do: &1, else: pump(&1)))
     |> maybe_complete()
+  end
+
+  # The host's part of a tool's details for the session; nil on any failure.
+  defp keep_details(nil, _name, _details), do: nil
+  defp keep_details(_keep, _name, nil), do: nil
+
+  defp keep_details(keep, name, details) when is_function(keep, 2) do
+    kept = keep.(name, details)
+
+    case kept != nil and Jason.encode(kept) do
+      {:error, error} ->
+        Logger.warning(
+          "[loop] keep_details for #{name} kept non-JSON: #{Exception.message(error)}"
+        )
+
+        nil
+
+      _ ->
+        kept
+    end
+  rescue
+    e ->
+      Logger.warning("[loop] keep_details for #{name} raised: #{Exception.message(e)}")
+      nil
+  catch
+    kind, reason ->
+      Logger.warning("[loop] keep_details for #{name} failed: #{inspect({kind, reason})}")
+      nil
+  end
+
+  defp keep_details(keep, name, _details) do
+    Logger.warning("[loop] keep_details for #{name} isn't a 2-arity function: #{inspect(keep)}")
+    nil
   end
 
   defp maybe_complete(%{run: %{batch: %{queue: [], running: running} = batch}} = s)
@@ -1056,13 +1105,15 @@ defmodule Rho.Loop do
       Enum.reduce(0..(map_size(batch.calls) - 1), {s, []}, fn i, {acc, entries} ->
         call = batch.calls[i]
 
-        {text, is_error, images} =
+        {text, is_error, images, details} =
           case batch.results[i] do
-            {text, is_error} -> {text, is_error, []}
-            {_text, _is_error, _images} = result -> result
+            {text, is_error} -> {text, is_error, [], nil}
+            {_text, _is_error, _images, _details} = result -> result
           end
 
-        tool_result = Session.tool_result(call["id"], call["name"], text, is_error, images)
+        tool_result =
+          Session.tool_result(call["id"], call["name"], text, is_error, images, details)
+
         {acc, entry} = persist(acc, tool_result)
         emit(acc, %{type: :message_start, entry: entry})
         emit(acc, %{type: :message_end, entry: entry})

@@ -29,8 +29,8 @@ defmodule Rho.Events do
     * `%{type: :tool_execution_start, id:, name:, arguments:}`
     * `%{type: :tool_execution_end, id:, name:, text:, is_error:, details:}`:
       `details` is what the tool returned for the host's screens
-      (`{:details, output, details}`, `Rho.ToolRunner`), else nil; it isn't
-      persisted
+      (`{:details, output, details}`, `Rho.ToolRunner`), else nil, whole;
+      the session keeps only what `Rho.Loop`'s `:keep_details` picks
     * `%{type: :turn_end, turn:, entry: assistant entry | nil, tool_results: [entry], error: String.t() | nil}`
     * `%{type: :retry, attempt:, delay_ms:, error:}`: the assistant message
       being streamed is discarded; the next `message_start` restarts it

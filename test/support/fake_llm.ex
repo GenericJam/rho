@@ -4,6 +4,7 @@ defmodule Rho.Test.FakeLLM do
   the script and plays its steps, streaming through the loop's sink.
 
   Steps: `{:text, s}`, `{:thinking, s}`, `{:tool_call, id, name, args}`,
+  `{:image, mime_type, bytes}` (a picture in the reply's `:images`),
   `{:sleep, ms}`, `:block` (never returns; the loop must kill it),
   `{:error, error}` (returns it), `{:usage, map}`, `{:finish, reason}`.
 
@@ -58,12 +59,6 @@ defmodule Rho.Test.FakeLLM do
         sink.({:thinking, s})
         play(rest, sink, %{acc | thinking: acc.thinking <> s})
 
-      {:tool_call, id, name, args} ->
-        play(rest, sink, %{
-          acc
-          | tool_calls: acc.tool_calls ++ [%{"id" => id, "name" => name, "arguments" => args}]
-        })
-
       {:sleep, ms} ->
         Process.sleep(ms)
         play(rest, sink, acc)
@@ -74,13 +69,23 @@ defmodule Rho.Test.FakeLLM do
       {:error, error} ->
         {:error, error}
 
-      {:usage, usage} ->
-        play(rest, sink, %{acc | usage: usage})
-
-      {:finish, reason} ->
-        play(rest, sink, %{acc | finish_reason: reason})
+      step ->
+        play(rest, sink, add(step, acc))
     end
   end
+
+  # The steps that only add to the reply.
+  defp add({:tool_call, id, name, args}, acc),
+    do: %{
+      acc
+      | tool_calls: acc.tool_calls ++ [%{"id" => id, "name" => name, "arguments" => args}]
+    }
+
+  defp add({:image, mime, bytes}, acc),
+    do: Map.update(acc, :images, [{mime, bytes}], &(&1 ++ [{mime, bytes}]))
+
+  defp add({:usage, usage}, acc), do: %{acc | usage: usage}
+  defp add({:finish, reason}, acc), do: %{acc | finish_reason: reason}
 
   defp default_usage, do: %{input_tokens: 100, output_tokens: 20, total_cost: 0.001}
 end

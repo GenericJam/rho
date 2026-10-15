@@ -25,6 +25,13 @@ defmodule Rho.LLM.ReqLLM do
   any other model prefix with `{:other, _}`. `max_tokens` is always
   explicit (req_llm's default is the model's whole output limit).
 
+  Pictures the model makes come back as the reply's `:images`: the
+  `:image` content parts (bytes and `media_type`) of the response's
+  message. That message already holds the streamed `:content_part`
+  chunks (req_llm's response builder materializes them; preview frames,
+  `stream_only?`, it leaves out), so each picture counts once. An
+  `:image_url` part (a link, not bytes) is skipped: rho doesn't fetch it.
+
   Every call that reached the provider is recorded with
   `Rho.Usage.record/3`: its tokens and cost, the subscription
   windows its response headers report, and a 429's reset.
@@ -328,7 +335,10 @@ defmodule Rho.LLM.ReqLLM do
   defp auth_options(:google, %{type: :api_key, key: key}, _request),
     do: [api_key: key, provider_options: [google_auth_header: true]]
 
-  defp reply(response) do
+  @doc false
+  # The `Rho.LLM` reply for a finished response.
+  @spec reply(ReqLLM.Response.t()) :: Rho.LLM.reply()
+  def reply(response) do
     message = response.message
 
     %{
@@ -342,10 +352,19 @@ defmodule Rho.LLM.ReqLLM do
             "arguments" => decode_args(call.function.arguments)
           }
         end,
+      images: images(message),
       usage: response.usage,
       finish_reason: response.finish_reason || (message && :stop)
     }
   end
+
+  defp images(%ReqLLM.Message{content: parts}) when is_list(parts) do
+    for %ReqLLM.Message.ContentPart{type: :image, data: data, media_type: mime} <- parts,
+        is_binary(data) and is_binary(mime),
+        do: {mime, data}
+  end
+
+  defp images(_message), do: []
 
   defp decode_args(json) when is_binary(json) do
     case Jason.decode(json) do

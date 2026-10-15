@@ -373,6 +373,45 @@ defmodule Rho.SessionTest do
     end
   end
 
+  test "tool details and the model's pictures are kept in the file, never sent to the model",
+       %{tmp_dir: dir} do
+    png = <<137, 80, 78, 71, 1, 2, 3>>
+    call = %{"id" => "c1", "name" => "passage", "arguments" => %{}}
+
+    reply =
+      %{text: "Here.", images: [{"image/png", png}], tool_calls: [call], stop_reason: "toolUse"}
+
+    s = Session.new(dir, model(), dir)
+    {s, _} = Session.append(s, Session.user("show me"))
+    {s, _} = Session.append(s, Session.assistant(reply, model()))
+
+    {s, _} =
+      Session.append(
+        s,
+        Session.tool_result("c1", "passage", "Gen 1:1", false, [], %{ref: "Gen 1:1", verses: [1]})
+      )
+
+    {_s, _} = Session.append(s, Session.tool_result("c2", "passage", "none", false))
+
+    {:ok, _s, entries} = Session.open(s.path, model())
+    [_change, _user, assistant, kept, plain] = Enum.map(entries, & &1["message"])
+
+    assert [
+             %{"type" => "text", "text" => "Here."},
+             %{"type" => "image", "mimeType" => "image/png", "data" => data},
+             %{"type" => "toolCall", "id" => "c1"}
+           ] = assistant["content"]
+
+    assert Base.decode64!(data) == png
+    assert kept["details"] == %{"ref" => "Gen 1:1", "verses" => [1]}
+    refute Map.has_key?(plain, "details")
+
+    assert [_user, sent, result, _plain] = Session.messages(entries)
+    assert [%{type: :text, text: "Here."}] = sent.content
+    assert [%{type: :text, text: "Gen 1:1"}] = result.content
+    refute inspect(Session.context(entries)) =~ "verses"
+  end
+
   test "lists sessions newest first, by header", %{tmp_dir: dir} do
     a = Session.new(dir, model(), dir)
     {_, _} = Session.append(a, Session.user("older"))
