@@ -41,8 +41,15 @@ defmodule Rho.ModelsTest do
     assert Enum.all?(google, &String.starts_with?(&1.spec, "google:"))
     assert Enum.any?(google, &String.starts_with?(&1.spec, "google:gemini"))
     assert Enum.any?(openai, &(&1.spec == "openai:gpt-5"))
-    # embeddings, speech, image-only and realtime / live models can't run the loop
-    refute Enum.any?(openai, &(&1.spec =~ ~r/embedding|tts|whisper|dall-e|realtime/))
-    refute Enum.any?(google, &(&1.spec =~ ~r/embedding|-live/))
+    # embeddings, speech, image-only, realtime / live, deep-research agents and
+    # computer-use models can't run the loop (llm_db marks some of them chat + tools)
+    excluded = ~r/embedding|tts|whisper|dall-e|realtime|-live|deep-research|computer-use/
+    refute Enum.any?(openai ++ google, &(&1.spec =~ excluded))
+
+    eligible =
+      for m <- LLMDB.models(:google), m.capabilities[:chat], do: m.id
+
+    assert Enum.any?(eligible, &(&1 =~ "deep-research"))
+    assert Enum.any?(eligible, &(&1 =~ "computer-use"))
   end
 end

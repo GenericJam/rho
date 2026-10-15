@@ -23,8 +23,9 @@ defmodule Rho.ToolRegistry do
   alias Rho.Tool
 
   @table __MODULE__
-  @sources {__MODULE__, :sources}
-  @core {__MODULE__, :core}
+  # The core list and the sources, in a table of their own owned by this
+  # process: they go with it, so a stopped registry has none.
+  @meta Module.concat(__MODULE__, Meta)
   @builtin [Rho.Tools.ReadArtifact, Rho.Tools.Todo]
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -63,11 +64,18 @@ defmodule Rho.ToolRegistry do
 
   @doc "The core tools the registry started with (a source's tool may not take their names)."
   @spec core_tools() :: [module()]
-  def core_tools, do: :persistent_term.get(@core, [])
+  def core_tools, do: meta(:core)
 
-  @doc "The registry's sources, in order."
+  @doc "The registry's sources, in order (none while the registry isn't running)."
   @spec sources() :: [module()]
-  def sources, do: :persistent_term.get(@sources, [])
+  def sources, do: meta(:sources)
+
+  defp meta(key) do
+    case :ets.whereis(@meta) do
+      :undefined -> []
+      table -> table |> :ets.lookup(key) |> Keyword.get(key, [])
+    end
+  end
 
   @doc "rho's own tools: `read_artifact` (paging a cut tool output) and `todo`."
   @spec builtin_tools() :: [module()]
@@ -87,14 +95,14 @@ defmodule Rho.ToolRegistry do
   @impl true
   def init(opts) do
     :ets.new(@table, [:named_table, :protected, read_concurrency: true])
+    :ets.new(@meta, [:named_table, :protected, read_concurrency: true])
     core = Keyword.get_lazy(opts, :tools, fn -> Application.get_env(:rho, :tools, @builtin) end)
 
     sources =
       Keyword.get_lazy(opts, :tool_sources, fn -> Application.get_env(:rho, :tool_sources, []) end)
 
     Enum.each(sources, &Code.ensure_loaded!/1)
-    :persistent_term.put(@core, core)
-    :persistent_term.put(@sources, sources)
+    :ets.insert(@meta, core: core, sources: sources)
     Enum.each(core, &put/1)
     {:ok, nil}
   end
@@ -109,12 +117,6 @@ defmodule Rho.ToolRegistry do
   def handle_call({:unregister, name}, _from, state) do
     :ets.delete(@table, name)
     {:reply, :ok, state}
-  end
-
-  @impl true
-  def terminate(_reason, _state) do
-    :persistent_term.erase(@core)
-    :persistent_term.erase(@sources)
   end
 
   defp put(module) do

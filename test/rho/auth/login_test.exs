@@ -130,7 +130,10 @@ defmodule Rho.Auth.LoginTest do
     browse(port, "/callback?code=c&state=#{opened_state()}")
 
     assert_receive {:rho_login, :anthropic, {:error, message}}, 2_000
-    assert message == "couldn't save it: the device's secure store isn't available in this build"
+    # the store's failure is named, and nothing was signed in
+    assert message =~ Rho.Auth.describe_error(:secure_store_unavailable)
+    Application.delete_env(:rho, :credential_store)
+    refute Rho.Auth.signed_in?(:anthropic)
   end
 
   test "providers that take only an API key have no sign-in flow" do

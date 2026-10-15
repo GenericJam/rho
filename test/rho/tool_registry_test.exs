@@ -70,6 +70,37 @@ defmodule Rho.ToolRegistryTest do
     assert ToolRegistry.list() == [Rho.Tools.ReadArtifact, Rho.Tools.Todo]
   end
 
+  test "the core list and sources go with the registry: stopped, killed or restarted" do
+    start_supervised!({ToolRegistry, tools: [Echo], tool_sources: [Source]}, id: :reg)
+    assert ToolRegistry.sources() == [Source]
+
+    :ok = stop_supervised(:reg)
+    assert ToolRegistry.sources() == []
+    assert ToolRegistry.core_tools() == []
+
+    pid = start_supervised!({ToolRegistry, tools: [Crash], tool_sources: [Other]}, id: :reg2)
+    assert ToolRegistry.sources() == [Other]
+
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, _, :killed}
+    # the supervisor restarts it with the same options
+    wait_until(fn -> Process.whereis(ToolRegistry) not in [nil, pid] end)
+    assert ToolRegistry.core_tools() == [Crash]
+    assert ToolRegistry.sources() == [Other]
+
+    :ok = stop_supervised(:reg2)
+    assert ToolRegistry.sources() == []
+  end
+
+  defp wait_until(fun, tries \\ 100) do
+    cond do
+      fun.() -> :ok
+      tries == 0 -> flunk("condition never held")
+      true -> Process.sleep(10) && wait_until(fun, tries - 1)
+    end
+  end
+
   test "sources are asked on every call: a switch shows at once; table, then sources in order" do
     start_supervised!({ToolRegistry, tools: [Echo], tool_sources: [Source, Other]})
     Source.put([{"crash", Crash}, {"echo", Slow}])

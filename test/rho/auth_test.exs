@@ -217,6 +217,21 @@ defmodule Rho.AuthTest do
     assert Auth.get(:anthropic) == {:ok, fresh}
   end
 
+  test "an API key stored during a refresh wins: the waiter gets the key, the store keeps it" do
+    start_supervised!({Auth, respond: endpoint(200, 200)})
+    :ok = Auth.put(:anthropic, creds(%{"expires" => now()}))
+
+    waiting = Task.async(fn -> Auth.credential(:anthropic) end)
+    assert_receive {:refresh_request, _}
+
+    :ok = Auth.put_api_key(:anthropic, "sk-ant-new")
+
+    # the waiter is answered only once the refresh's result is in: it was
+    # dropped, not saved over the key
+    assert Task.await(waiting) == {:ok, %{type: :api_key, key: "sk-ant-new"}}
+    assert Auth.get(:anthropic) == {:ok, %{"type" => "api_key", "key" => "sk-ant-new"}}
+  end
+
   describe "when the store fails" do
     setup do
       on_exit(&FlakyCredentialStore.restore/0)
