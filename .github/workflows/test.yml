@@ -20,10 +20,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The oldest Elixir mix.exs allows: compiles and passes the tests.
           - elixir: '1.18'
             otp: '27'
+          # Format and Credo run here only: the formatter's output changes
+          # between Elixir versions.
           - elixir: '1.19'
             otp: '28'
+            lint: true
     steps:
       - uses: actions/checkout@v4
 
@@ -46,9 +50,11 @@ jobs:
       - run: mix compile --warnings-as-errors
 
       - name: Format check
+        if: matrix.lint
         run: mix format --check-formatted
 
       - name: Credo (strict)
+        if: matrix.lint
         run: mix credo --strict
 
       - name: Tests
