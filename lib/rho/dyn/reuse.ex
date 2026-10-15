@@ -275,8 +275,8 @@ defmodule Rho.Dyn.Reuse do
   defp stale?(bin, r), do: :binary.match(bin, r.stale) != :nomatch
 
   # Recompiling the renamed Erlang code: what the binary rename can't do.
-  # The compiler doesn't compress literals (OTP 28 and later), so a string
-  # still holding the old name shows in the binary.
+  # A string still holding the old name shows in the binary, or (OTP 27
+  # and earlier compress the literal table) in its uncompressed literals.
   defp compile_forms(bin, r, file) do
     with {:ok, {_mod, [abstract_code: {:raw_abstract_v1, forms}]}} <-
            :beam_lib.chunks(bin, [:abstract_code]),
@@ -288,10 +288,20 @@ defmodule Rho.Dyn.Reuse do
              :return_errors,
              :no_spawn_compiler_process
            ]),
-         false <- stale?(out, r) do
+         false <- stale?(out, r) or stale_literals?(out, r) do
       {:ok, mod, out}
     else
       _ -> :error
+    end
+  end
+
+  defp stale_literals?(bin, r) do
+    case :beam_lib.chunks(bin, [~c"LitT"]) do
+      {:ok, {_mod, [{_id, <<size::32, compressed::binary>>}]}} when size > 0 ->
+        stale?(:zlib.uncompress(compressed), r)
+
+      _ ->
+        false
     end
   end
 
