@@ -1013,6 +1013,12 @@ defmodule Rho.Loop do
     if timer, do: Process.cancel_timer(timer)
     call = s.run.batch.calls[i]
 
+    {result, details} =
+      case result do
+        {:details, result, details} -> {result, details}
+        result -> {result, nil}
+      end
+
     {text, is_error, images} =
       case result do
         {:ok, {:images, images, text}} -> {text, false, images}
@@ -1028,7 +1034,8 @@ defmodule Rho.Loop do
       id: call["id"],
       name: call["name"],
       text: text,
-      is_error: is_error
+      is_error: is_error,
+      details: details
     })
 
     s

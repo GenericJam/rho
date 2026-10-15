@@ -129,6 +129,35 @@ defmodule Rho.LoopTest do
     assert [_, _, %{role: :tool, content: [_, %{type: :image}]}, _] = Session.messages(entries)
   end
 
+  test "a tool's details go to the subscribers with its end, its text to the model and session",
+       %{tmp_dir: dir} do
+    script = [
+      [{:tool_call, "c1", "details", %{}}, {:tool_call, "c2", "echo", %{}}],
+      [{:text, "ok"}]
+    ]
+
+    tools = [Rho.Test.Tools.Details, Rho.Test.Tools.Echo]
+    %{loop: loop, llm: llm, session: session} = start_loop(dir, script, tools: tools)
+    :ok = Loop.prompt(loop, "look")
+    events = collect()
+
+    # In completion order: the two run side by side.
+    ends = for %{type: :tool_execution_end} = e <- events, do: {e.name, e.text, e.details}
+    assert Enum.sort(ends) == [{"details", "two verses", %{verses: [1, 2]}}, {"echo", "", nil}]
+
+    [_, second] = FakeLLM.requests(llm)
+    assert [%{role: :tool} = tool, _echo] = Enum.drop(second.messages, 2)
+    assert text_of(tool) == "two verses"
+
+    {:ok, _session, entries} = Session.open(session.path, model())
+
+    assert [%{"message" => result}, _echo] =
+             for(%{"message" => %{"role" => "toolResult"}} = e <- entries, do: e)
+
+    assert Session.text(result["content"]) == "two verses"
+    refute Map.has_key?(result, "details")
+  end
+
   describe "attachments" do
     defp photo do
       %{

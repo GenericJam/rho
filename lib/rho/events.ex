@@ -27,7 +27,10 @@ defmodule Rho.Events do
       `message_start` carries an unpersisted entry with empty content
     * `%{type: :message_update, kind: :text | :thinking, delta: String.t()}`
     * `%{type: :tool_execution_start, id:, name:, arguments:}`
-    * `%{type: :tool_execution_end, id:, name:, text:, is_error:}`
+    * `%{type: :tool_execution_end, id:, name:, text:, is_error:, details:}`:
+      `details` is what the tool returned for the host's screens
+      (`{:details, output, details}`, `Rho.ToolRunner`), else nil; it isn't
+      persisted
     * `%{type: :turn_end, turn:, entry: assistant entry | nil, tool_results: [entry], error: String.t() | nil}`
     * `%{type: :retry, attempt:, delay_ms:, error:}`: the assistant message
       being streamed is discarded; the next `message_start` restarts it

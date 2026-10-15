@@ -9,8 +9,9 @@ defmodule Rho.Tool do
   pid, and `:withheld`, the tool names that loop doesn't offer, so read it
   with `Map.get(ctx, :withheld, [])`). It returns `{:ok, output}` or
   `{:error, reason}`; non-binary values are JSON-encoded (or inspected) for
-  the model. A raise, exit or timeout becomes an error result; it never
-  takes the loop down.
+  the model. Pictures, and data for the host's screens beside the text
+  (`{:ok, {:details, output, details}}`), are `Rho.ToolRunner`'s. A raise,
+  exit or timeout becomes an error result; it never takes the loop down.
   """
 
   @callback name() :: String.t()

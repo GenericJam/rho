@@ -15,6 +15,13 @@ defmodule Rho.ToolRunner do
   A tool may answer with pictures for the model as well as text:
   `{:ok, {:images, [{mime_type, bytes}], text}}` (photos), or
   `{:ok, {:image, mime_type, bytes, text}}` for one (a screenshot).
+
+  And with data for the host's screens beside what the model reads (pi's
+  tool result `details`): `{:ok, {:details, output, details}}`, where
+  `output` is any of the above. The model and the session get `output`;
+  `details` goes only to the loop's subscribers, with
+  `tool_execution_end` (`Rho.Events`), so a screen can draw the answer
+  (a passage, a table) without parsing the text.
   """
 
   alias Rho.Tool
@@ -42,8 +49,21 @@ defmodule Rho.ToolRunner do
   end
 
   @type images :: {:images, [{String.t(), binary()}], String.t()}
+  @type result :: {:ok, String.t() | images()} | {:error, String.t()}
 
-  @spec to_result(term()) :: {:ok, String.t() | images()} | {:error, String.t()}
+  @doc """
+  A tool's return as the loop takes it: `{:ok, text | images}` or
+  `{:error, text}`, or `{:details, result, details}` for a tool that
+  answered with details (see the moduledoc).
+  """
+  @spec to_result(term()) :: result() | {:details, result(), term()}
+  def to_result({:ok, {:details, output, details}}) do
+    case to_result({:ok, output}) do
+      {:details, result, _nested} -> {:details, result, details}
+      result -> {:details, result, details}
+    end
+  end
+
   def to_result({:ok, {:image, mime, data, text}}),
     do: to_result({:ok, {:images, [{mime, data}], text}})
 

@@ -169,3 +169,17 @@ defmodule Rho.Test.Tools.Notes do
     {:ok, "Appended."}
   end
 end
+
+defmodule Rho.Test.Tools.Details do
+  @moduledoc "Test tool: answers with text for the model and data for the screens."
+  @behaviour Rho.Tool
+
+  @impl true
+  def name, do: "details"
+  @impl true
+  def description, do: "Returns text and details."
+  @impl true
+  def parameter_schema, do: %{"type" => "object"}
+  @impl true
+  def run(_args, _ctx), do: {:ok, {:details, "two verses", %{verses: [1, 2]}}}
+end
