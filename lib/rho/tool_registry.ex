@@ -70,11 +70,12 @@ defmodule Rho.ToolRegistry do
   @spec sources() :: [module()]
   def sources, do: meta(:sources)
 
+  # No table (the registry isn't running, or died between the check and the
+  # read) means none.
   defp meta(key) do
-    case :ets.whereis(@meta) do
-      :undefined -> []
-      table -> table |> :ets.lookup(key) |> Keyword.get(key, [])
-    end
+    @meta |> :ets.lookup(key) |> Keyword.get(key, [])
+  rescue
+    ArgumentError -> []
   end
 
   @doc "rho's own tools: `read_artifact` (paging a cut tool output) and `todo`."
