@@ -266,9 +266,12 @@ defmodule Rho.AuthTest do
 
       assert {:error, {:store_failed, _}} = Auth.credential(:anthropic)
       FlakyCredentialStore.fail([])
-      Process.sleep(100)
 
-      assert {:ok, %{"refresh" => "rt-2"}} = Auth.get(:anthropic)
+      # no call needed: the retry timer saves it (polled, not slept on: CI is slow)
+      assert Enum.any?(1..200, fn _ ->
+               match?({:ok, %{"refresh" => "rt-2"}}, Auth.get(:anthropic)) or
+                 (Process.sleep(10) && false)
+             end)
     end
 
     test "a replacement that doesn't save leaves the refresh in flight in charge" do
