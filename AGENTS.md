@@ -28,6 +28,13 @@ Follow `~/AGENTS.md` (commits, reviews, Muster).
   (`Rho.Test.FakeLLM`) and answer HTTP in-process (`:respond`).
 - No compile-time `~r//` in module attributes (OTP 28 can't store
   compiled regexes there); new code uses `Regex.compile!/1`.
+- **Dyn** (`lib/rho/dyn*`, `lib/rho/tools/dyn_*`) is Operator's
+  self-modification layer, moved here: keep its semantics (approval
+  tokens, probation, crash revert, safe mode, the proposal cap, deferred
+  unloading) exactly. Host specifics go through `Rho.Dyn.Config` (namespace,
+  Core prefixes, check lists) and `Rho.Dyn.Screens`. Its tests compile into
+  the VM-wide code server: `async: false`, `purge_all/0` around each.
+  mob is an optional dependency, only for `Rho.Dyn.Screens.Mob` and tests.
 - No Hex publish or version bump meant to publish without Kevin's say-so.
   There's no release workflow yet on purpose: adding one publishes on push.
 

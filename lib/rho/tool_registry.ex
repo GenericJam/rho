@@ -129,8 +129,8 @@ end
 defmodule Rho.ToolRegistry.Source do
   @moduledoc """
   A source of tools the registry asks on every call, for tool sets that
-  change while the app runs (Operator's Dyn generations: tools the agent
-  writes, compiles and activates on the device). Configure with
+  change while the app runs (the Dyn layer's generations, `Rho.Dyn.Source`:
+  tools the agent writes, compiles and activates on the device). Configure with
   `{Rho.Supervisor, tool_sources: [MySource]}` or
   `config :rho, :tool_sources, [MySource]`.
 

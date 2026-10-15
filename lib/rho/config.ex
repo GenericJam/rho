@@ -35,6 +35,8 @@ defmodule Rho.Config do
       `switch_model:` (default `"in the app's settings"`).
     * `:tools`, `:tool_sources`: `Rho.ToolRegistry`'s core tools and
       registry sources, when `Rho.Supervisor` isn't given them.
+    * `:dyn`: the Dyn layer (agent-written code, `Rho.Dyn`), off by
+      default; its keys are `Rho.Dyn.Config`'s.
   """
 
   alias Rho.Auth.Login

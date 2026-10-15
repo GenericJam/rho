@@ -25,6 +25,9 @@ sessions, context compaction, tools, and model sign-in, on
   (Codex) subscriptions through omp's OAuth PKCE flows, with refresh
   coordination and refresh-token rotation; or an API key for Anthropic,
   OpenAI or Gemini.
+- **Dyn** (`Rho.Dyn`, optional): tools and screens the agent writes,
+  compiles and runs on the device, one approved generation at a time, on
+  probation and reverted when they crash.
 
 ## Lineage
 
@@ -104,10 +107,61 @@ them all):
 | `:app_name`, `:hints` (where the user signs in or switches model, in messages) | "the app", "the app's settings" | |
 | Attachments (`t:Rho.Session.attachment/0`: pictures, text, PDFs with a user message) | none: the host builds them from its pickers and camera | |
 | Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM` | |
+| `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
 
 On a phone, `Rho.Supervisor` also writes llm_db a catalog trimmed to the
 four providers (`Rho.LLMCatalog`), since the packaged one isn't shipped
 to the device.
+
+## Dyn: code the agent writes on the device
+
+`Rho.Dyn` lets the agent change the app it runs in without a release: it
+writes Elixir tools (and, in a UI app, screens) in a staging copy with the
+`dyn_*` tools, and `dyn_propose` statically checks, compiles and selftests
+them as a new **generation**. Nothing runs until the human approves it with
+the screen lock; then it is on **probation**: 3 crashes in 60 s, or a launch
+that dies before it is stable, revert it to its parent, and two failed
+launches in a row start the next one in **safe mode** (no Dyn code loaded),
+so the fixed Core can always repair it. Generation `n` compiles the
+agent's `Dyn.Foo` as `Dyn.G<n>.Foo`, next to the running one rather than
+over it; old generations unload only once nothing runs their code.
+Activations and reverts change the loop's tools from its next model call
+(`Rho.Dyn.Source`, a `Rho.ToolRegistry.Source`).
+
+It is off unless the host turns it on:
+
+```elixir
+# config/config.exs
+config :rho, :dyn,
+  enabled: true,
+  namespace: MyApp.Dyn,
+  app: :my_app,
+  core: [MyApp],
+  allowed: [MyApp.Files],
+  screens: Rho.Dyn.Screens.Mob
+
+# the host's boot, once Rho.Supervisor is up (it starts the Keeper):
+Rho.Dyn.boot()
+```
+
+Its seams (`Rho.Dyn.Config` documents each):
+
+| Seam | Default | Operator |
+| --- | --- | --- |
+| `:enabled` (or `Rho.Supervisor`'s `:dyn`): start `Rho.Dyn.Keeper` and the approval store, offer the `dyn_*` tools | off | on |
+| `:namespace`: the modules the agent writes | `Dyn` | `Operator.Dyn` |
+| `:app`, `:core`: the Core's modules (a new Core rebuilds every generation; Dyn code may not call them) | rho's | `:operator`, `[Operator]` |
+| `:allowed`: Core modules Dyn code may call | `Rho.Tool` | its file, TFLite and terminal modules |
+| `:check`: the static check's ban, allow and gate lists | Operator's (`Rho.Dyn.Check.defaults/0`) | the defaults, plus its own file module's message and caller-side functions |
+| `:screens` (`Rho.Dyn.Screens`): what a screen is, its selftest, the first-frame hook, app lifecycle, "is it on screen yet" | `Rho.Dyn.Screens.None` (no screens) | `Rho.Dyn.Screens.Mob` plus its front |
+| `:approval` (`Rho.Dyn.Approval`): tokens for activate / revert | `Rho.Dyn.Approval.Biometric` (the host's UI confirms after the screen-lock prompt) | the same, fed by its approve chip |
+| `:on_stable`, `Rho.Dyn.boot/1`'s `core:` / `core_rolled_back:`: a launch reaching stable, the Core update it runs | none | mob_deliver's probation |
+| `:guide`: the host's rules in `Rho.Dyn.agent_guide/0` | none | its file roots, menu rows |
+| `Rho.Dyn.Seed`: default sources the host ships, merged with the user's on each new version | none | its default front |
+
+On a phone, Dyn needs the Elixir compiler at run time: the app's build must
+ship `:elixir`'s compiler modules and `:compiler`, so a slim build that
+strips them can't use Dyn.
 
 ## Development
 

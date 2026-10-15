@@ -37,6 +37,9 @@ defmodule Rho.MixProject do
       {:finch, "~> 0.24"},
       {:jason, "~> 1.4"},
       {:llm_db, "~> 2026.9"},
+      # Dyn screens are mob screens: `Rho.Dyn.Screens.Mob` compiles when the
+      # host has mob (rho's own tests run it too).
+      {:mob, "~> 0.9.17", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false}
     ]
