@@ -447,8 +447,10 @@ defmodule Rho.LoopTest do
          %{tmp_dir: dir, call: call} do
       %{loop: loop, llm: llm} = start_loop(dir, [call, [:block]], max_iterations: 1)
       :ok = Loop.prompt(loop, "loop forever")
-      assert_receive {:llm_request, _first, _worker}
-      assert_receive {:llm_request, _wrap_up, _worker}
+      # The wrap-up request comes after the tool batch; a loaded runner can take
+      # longer than assert_receive's default 100 ms (flaked once on OTP 28 CI).
+      assert_receive {:llm_request, _first, _worker}, 2_000
+      assert_receive {:llm_request, _wrap_up, _worker}, 2_000
 
       :ok = Loop.stop(loop)
       events = collect()
