@@ -10,8 +10,12 @@ defmodule Rho.Dyn.Config do
       `Rho.Supervisor`'s `:dyn` option overrides it.
     * `:namespace`: the module namespace the agent writes in
       (`defmodule Dyn.Weather`), compiled as `<namespace>.G<n>.*`. Default
-      `Dyn`. Not under `Rho` (rho's own modules live there), and fixed
-      for an install: generations on disk name it.
+      `Dyn`. Fixed for an install: generations on disk name it. It may be
+      below a Core prefix (Operator's `Operator.Dyn`, below `Operator`),
+      but not below `Rho` (rho's own modules live there), nor at or above
+      a Core prefix (the Core's modules would count as Dyn code and drop
+      out of the runtime digest): `Rho.Dyn.Keeper` refuses to start then
+      (`validate!/0`).
     * `:app`: the host's OTP application. Its version and modules are part
       of the Core (`Rho.Dyn.Compiler.runtime/0`: a new Core rebuilds every
       generation). Default `nil` (rho's own only).
@@ -21,7 +25,8 @@ defmodule Rho.Dyn.Config do
     * `:allowed`: Core modules Dyn code may call (`[MyApp.Files]`). `Rho.Tool`
       is always one. Default `[]`.
     * `:check`: the static check's lists, merged over its defaults
-      (`Rho.Dyn.Check.defaults/0`, Operator's): `:banned` (`%{module =>
+      (`Rho.Dyn.Check.defaults/0`: Operator's, except the entries naming
+      Operator's own code): `:banned` (`%{module =>
       why}`), `:banned_erlang` (`%{atom => why}`), `:partial` (`%{module
       => [function]}`: allowed modules with forbidden functions), `:gated`
       (`%{prefix => [module]}`: only those modules below the prefix),
@@ -79,6 +84,28 @@ defmodule Rho.Dyn.Config do
 
   @spec check() :: keyword()
   def check, do: Keyword.get(get(), :check, [])
+
+  @doc """
+  Raises `ArgumentError` if the namespace is below `Rho`, or is a Core
+  prefix or above one (see `:namespace`).
+  """
+  @spec validate!() :: :ok
+  def validate! do
+    ns = namespace_name()
+
+    cond do
+      under?(ns, "Rho") ->
+        raise ArgumentError,
+              "the Dyn namespace #{ns} must not be below Rho (rho's own modules live there)"
+
+      prefix = Enum.find(core(), &under?(&1, ns)) ->
+        raise ArgumentError,
+              "the Dyn namespace #{ns} must not be the Core prefix #{prefix} or above it"
+
+      true ->
+        :ok
+    end
+  end
 
   @spec guide() :: String.t() | nil
   def guide do

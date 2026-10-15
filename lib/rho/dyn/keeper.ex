@@ -114,7 +114,6 @@ defmodule Rho.Dyn.Keeper do
     :selftest_timeout_ms,
     :selftest_max_heap_mb
   ]
-  @namespace_hint "the Dyn namespace must not be below Rho (rho's own modules live there)"
 
   @type boot_report :: %{
           mode: :normal | :safe,
@@ -242,7 +241,7 @@ defmodule Rho.Dyn.Keeper do
 
   @impl true
   def init(opts) do
-    if Config.under?(Config.namespace_name(), "Rho"), do: raise(ArgumentError, @namespace_hint)
+    :ok = Config.validate!()
     name = Keyword.fetch!(opts, :name)
     dir = Keyword.get_lazy(opts, :dir, &Store.default_root/0)
     File.mkdir_p!(dir)

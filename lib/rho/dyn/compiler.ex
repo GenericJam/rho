@@ -217,9 +217,10 @@ defmodule Rho.Dyn.Compiler do
     ns = Config.namespace_segments()
     versioned = ns ++ [:"G#{n}"]
     sigils = Check.sigils()
-    # A written-out namespace in a template, `Elixir.`-rooted or not; not
-    # the tail of a longer name (`Other.Dyn.X`).
-    pattern = Regex.compile!("(?<![\\w.])(?:Elixir\\.)?#{Regex.escape(Enum.join(ns, "."))}\\.")
+    # A namespace written out in a template, as a word (`Elixir.Dyn.X` and
+    # `Inspect.Dyn.X` too, as Operator's `\bOperator\.Dyn\.` did), with a
+    # module name after it, so prose ("built with Dyn.") is left alone.
+    pattern = Regex.compile!("\\b#{Regex.escape(Enum.join(ns, "."))}\\.(?=[A-Z])")
     replacement = Enum.join(versioned, ".") <> "."
 
     Macro.prewalk(ast, fn

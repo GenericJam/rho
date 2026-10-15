@@ -262,5 +262,32 @@ defmodule Rho.Dyn.HostSeamsTest do
              start_supervised({Keeper, Keyword.put(@fast, :dir, dir)})
 
     assert m =~ "must not be below Rho"
+
+    # Nor the Core's own prefix (its modules would count as Dyn code).
+    put_env(:dyn, namespace: Notebook, core: [Notebook])
+
+    assert {:error, {{%ArgumentError{message: m}, _stack}, _child}} =
+             start_supervised({Keeper, Keyword.put(@fast, :dir, dir)})
+
+    assert m =~ "must not be the Core prefix Notebook"
+  end
+
+  test "the host's check entries override the defaults whether written as modules or strings" do
+    host!(
+      check: [
+        banned: %{File => nil},
+        gated: %{Mob => [Mob.UI]},
+        banned_erlang: %{notebook_nif: "holds the sign-ins"}
+      ]
+    )
+
+    run = fn body -> Check.run(%{"p.ex" => "defmodule Notebook.Gen.P do\n  #{body}\nend\n"}) end
+
+    assert {:ok, _} = run.(~s|def x, do: File.exists?("a")|)
+    assert {:ok, _} = run.("def x, do: Mob.UI.text(\"a\")")
+    assert {:error, [%{message: m}]} = run.("def x(s), do: Mob.Socket.assign(s, :a, 1)")
+    assert m =~ "is not one of Mob's app-facing modules"
+    assert {:error, [%{message: m}]} = run.("def x, do: :notebook_nif.get(1)")
+    assert m =~ "holds the sign-ins"
   end
 end

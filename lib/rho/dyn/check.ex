@@ -210,9 +210,12 @@ defmodule Rho.Dyn.Check do
   }
 
   @doc """
-  The default lists (Operator's), as `config :rho, :dyn, check: [...]`
-  takes them; the host's entries are merged over these (a `nil` value drops
-  one; `:handlers` replaces the list).
+  The default lists, as `config :rho, :dyn, check: [...]` takes them:
+  Operator's, except for the entries that name Operator's own code (its
+  sign-in NIF `:operator_secure_store`, and the caller-side functions of
+  `Operator.Core.Files`), which its config adds. The host's entries are
+  merged over these, keys written as modules or strings alike (a `nil`
+  value drops one; `:handlers` replaces the list).
   """
   @spec defaults() :: keyword()
   def defaults do
@@ -229,14 +232,15 @@ defmodule Rho.Dyn.Check do
 
   @doc "The template sigils whose expressions are code (`:sigils`), as their macro names."
   @spec sigils() :: [atom()]
-  def sigils, do: Map.keys(merge(defaults()[:sigils], Config.check()[:sigils]))
+  def sigils, do: Map.keys(merge(defaults()[:sigils], Config.check()[:sigils], & &1))
 
   @doc "The check's rules as they apply now: the defaults with the host's config over them."
   @spec policy() :: map()
   def policy do
     defaults = defaults()
     host = Config.check()
-    merged = fn key -> merge(defaults[key], host[key]) end
+    merged = fn key, norm -> merge(defaults[key], host[key], norm) end
+    name_key = fn {mod, value} -> {Config.name(mod), value} end
 
     handlers =
       for {mod, fun, arity, index} <- Keyword.get(host, :handlers, defaults[:handlers]),
@@ -247,23 +251,27 @@ defmodule Rho.Dyn.Check do
       ns_segs: Config.namespace_segments(),
       core: Config.core(),
       allowed: Config.allowed(),
-      banned: Map.new(merged.(:banned), fn {mod, why} -> {Config.name(mod), why} end),
-      banned_erlang: merged.(:banned_erlang),
-      partial: Map.new(merged.(:partial), fn {mod, funs} -> {target(mod), funs} end),
+      banned: merged.(:banned, name_key),
+      banned_erlang: merged.(:banned_erlang, & &1),
+      partial: merged.(:partial, fn {mod, funs} -> {target(mod), funs} end),
       gated:
-        Map.new(merged.(:gated), fn {prefix, mods} ->
-          {Config.name(prefix), Enum.map(mods, &Config.name/1)}
+        Map.new(merged.(:gated, name_key), fn {prefix, mods} ->
+          {prefix, Enum.map(mods, &Config.name/1)}
         end),
-      forging: merged.(:forging),
-      sigils: merged.(:sigils),
+      forging: merged.(:forging, & &1),
+      sigils: merged.(:sigils, & &1),
       handlers: handlers
     }
   end
 
-  defp merge(default, nil), do: default
-
-  defp merge(default, host) when is_map(host),
-    do: default |> Map.merge(host) |> Map.reject(fn {_k, v} -> is_nil(v) end)
+  # The host's map over the default, both with their keys normalised by
+  # `norm` first (so `File` and `"File"` are one key); `nil` drops an entry.
+  defp merge(default, host, norm) do
+    default
+    |> Map.new(norm)
+    |> Map.merge(Map.new(host || %{}, norm))
+    |> Map.reject(fn {_k, v} -> is_nil(v) end)
+  end
 
   # A module as the check names it: `MyApp.Files` / "MyApp.Files" is Elixir's, `:os` Erlang's.
   defp target(name) when is_binary(name), do: {:elixir, Config.name(name)}
