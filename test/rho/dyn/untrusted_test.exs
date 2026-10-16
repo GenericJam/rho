@@ -560,4 +560,16 @@ defmodule Rho.Dyn.UntrustedTest do
     :persistent_term.put(@description, :fine)
     assert Rho.Tool.info(tool) == :error
   end
+
+  test "a Dyn process dying with an error of its own runs none of its code in the logger",
+       %{tmp_dir: dir} do
+    mod = hostile(dir)
+    proxy = Process.whereis(:logger_proxy)
+    # A plain process's error is reported by the emulator and translated in
+    # :logger_proxy: there, message/1 would run (and loop, with mode :loop).
+    spawn(fn -> raise mod, message: "spawned", mode: :plain end)
+    Process.sleep(300)
+    refute Enum.any?(receive_probes([]), fn {_hook, pid} -> pid == proxy end)
+    assert Process.info(proxy, :current_function) != {:current_function, {mod, :message, 1}}
+  end
 end

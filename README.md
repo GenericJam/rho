@@ -187,6 +187,9 @@ exits `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) is reported with
 `text`. Known limit: a Dyn process crashing with an exception whose
 `message/1` fails in certain ways can make OTP drop Elixir's logger
 translator VM-wide (that code runs in the Dyn process, not a Core one).
+A log event that holds a Dyn struct is described before Elixir's
+translator sees it (`Rho.Dyn.LogGuard`, installed by the Keeper), so a
+Dyn process's crash report runs none of its code in `:logger_proxy`.
 
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that

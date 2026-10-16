@@ -66,4 +66,8 @@ can share it.
   fails is left out, one that ran over is read again after 1, 5 and 30
   minutes, then stays out. Hosts watch their own Dyn processes with
   `Rho.Dyn.watch/2` and `Rho.Dyn.unwatch/1` and may exit them with
-  `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) to report `text`.
+  `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) to report `text`. A
+  primary logger filter (`Rho.Dyn.LogGuard`) describes any log event that
+  holds a Dyn struct, so a Dyn process's crash report runs none of its code
+  in `:logger_proxy`; the check refuses `:logger`, `:telemetry`,
+  `:gen_event` and `Logger`'s translators and configuration.

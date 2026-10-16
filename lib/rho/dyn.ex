@@ -617,6 +617,8 @@ defmodule Rho.Dyn do
     top level. Refer to your other modules as `#{ns}.<Name>` (an `alias` is fine).
     - `Path` is fine except `Path.wildcard`. No `File`, `System.cmd`, `Port`, `:os`, `Code`, \
     `Module`, `:code`, `Node`#{nif_rule()}; no tracing, suspending or listing processes; no \
+    `:logger`, `:telemetry` or `Logger.add_translator`/`configure` (logging with `Logger.info` \
+    is fine); no \
     `:persistent_term.put`; no `defmacro`, `quote` or `unquote`; no `apply`/`spawn` on a \
     module held in a variable; no `String.to_atom`. None of the app's own modules except \
     #{allowed}.

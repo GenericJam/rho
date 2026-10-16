@@ -39,6 +39,11 @@ defmodule Rho.Dyn.Check do
       and listing every process (`Process.list/0`, `:erlang.processes/0`);
       `:persistent_term` only to read (`put` / `erase` change VM-wide state
       and trigger a global GC);
+    * nothing that installs code to run in other processes: `:logger`,
+      `:error_logger`, `:telemetry`, `:gen_event`, and `Logger`'s
+      translators, backends and configuration (`Logger.info/1` and friends
+      are fine); a Dyn process's own crash report is kept out of the
+      logger's processes by `Rho.Dyn.LogGuard`;
     * not the router's name, `:mob_screen`: whatever arrives there is handed
       to the front host as a native reply, so a front screen sending to it
       could forge a capability grant (a picked file); nor `:mob_file_result`,
@@ -144,7 +149,13 @@ defmodule Rho.Dyn.Check do
     erl_tracer: "traces other processes",
     erts_debug: "reaches into the VM's internals",
     erts_internal: "reaches into the VM's internals",
-    observer_backend: "inspects other processes and the VM"
+    observer_backend: "inspects other processes and the VM",
+    logger: "installs handlers and filters that run in every process that logs",
+    error_logger: "installs handlers that run in the logger's processes",
+    logger_backends: "installs handlers that run in the logger's processes",
+    telemetry: "attaches handlers that run in the processes that emit events (the Core's)",
+    gen_event: "adds handlers that run in other processes",
+    gen_statem: "calls arbitrary OTP servers"
   }
 
   # Allowed modules with forbidden functions (may only be called directly).
@@ -159,6 +170,10 @@ defmodule Rho.Dyn.Check do
     Protocol => ~w(derive __derive__ consolidate)a,
     Process => ~w(list info whereis registered)a,
     Path => [:wildcard],
+    # What runs in every process that logs, or in the logger's own.
+    Logger => ~w(add_translator remove_translator add_backend remove_backend configure
+         configure_backend add_handlers put_module_level delete_module_level
+         put_application_level delete_application_level)a,
     Kernel => [],
     Mob.Screen => ~w(start_root start_link dispatch get_socket get_current_module get_nav_history
          get_screen_pid)a,
