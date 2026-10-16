@@ -164,8 +164,17 @@ Its seams (`Rho.Dyn.Config` documents each):
 The default check keeps Dyn code to Mob's Elixir modules: Mob's native
 layer `:mob_nif` is banned (`banned_erlang`, and as a value in `forging`,
 so it can't be held in a variable and called), and the host's `:gated` and
-`:allowed` lists say which of Mob's modules Dyn code may use. The check is
-defence in depth, not a sandbox (`Rho.Dyn.Check`). A host whose Dyn code
+`:allowed` lists say which of Mob's modules Dyn code may use.
+
+**Threat model.** The check is a best-effort deny-list against the model's
+mistakes (a built tool that crashes, hangs, or calls something it shouldn't
+by accident), not a sandbox against deliberately hostile code. Known ways
+around it: atoms or funs handed in as data, raw messages to OTP processes
+(a `report_cb` sent to `:logger_proxy`), modules the lists don't name
+(Logger.App, `Logger.Backends.*`, `LoggerBackends`), starting a child
+under a trusted supervisor or `:alarm_handler`, and CPU, memory or message
+floods; `Rho.Dyn.Check` keeps the list. A host with stronger needs must
+isolate Dyn code itself (another node or OS process). A host whose Dyn code
 must call it drops both:
 `check: [banned_erlang: %{mob_nif: nil}, forging: %{mob_nif: nil}]`.
 
@@ -190,6 +199,8 @@ translator VM-wide (that code runs in the Dyn process, not a Core one).
 A log event that holds a Dyn struct is described before Elixir's
 translator sees it (`Rho.Dyn.LogGuard`, installed by the Keeper), so a
 Dyn process's crash report runs none of its code in `:logger_proxy`.
+`Rho.Untrusted` and `LogGuard` lower the chance that a built tool's crash
+takes a trusted process down; like the check, they are best effort.
 
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that

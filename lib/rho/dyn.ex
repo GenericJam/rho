@@ -51,6 +51,13 @@ defmodule Rho.Dyn do
   A Dyn screen's own process runs its code, so whatever the host's screen
   layer does with its crash is the host's (mob's) business.
 
+  **Threat model**: Dyn guards against the model's mistakes (a built tool
+  that crashes, hangs, or calls something it shouldn't by accident), not
+  against deliberately hostile code. The static check is a best-effort
+  deny-list, not a sandbox (`Rho.Dyn.Check` lists the known ways around
+  it); `Rho.Untrusted` and `Rho.Dyn.LogGuard` lower the chance that a Dyn
+  crash takes a trusted process down.
+
   Dyn compiles Elixir on the device: the app must ship the Elixir compiler
   (`:elixir`'s compiler modules and `:compiler`), so no slim build that
   strips them.

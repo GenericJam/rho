@@ -71,3 +71,10 @@ can share it.
   holds a Dyn struct, so a Dyn process's crash report runs none of its code
   in `:logger_proxy`; the check refuses `:logger`, `:telemetry`,
   `:gen_event` and `Logger`'s translators and configuration.
+- **Threat model**: the static check (`Rho.Dyn.Check`) is a best-effort
+  deny-list against the model's mistakes, not a sandbox against hostile
+  code; `Rho.Untrusted` and `Rho.Dyn.LogGuard` lower the chance that a
+  built tool's crash takes a trusted process down. Known ways around the
+  check (raw messages to `:logger_proxy`, Logger.App and logger backend
+  modules, children started under trusted supervisors, `:alarm_handler`,
+  resource floods) are listed in `Rho.Dyn.Check` and the README.

@@ -33,6 +33,12 @@ defmodule Rho.Untrusted do
   exception whose `message/1` fails in certain ways can make OTP remove
   Elixir's logger translator VM-wide (later crash logs are untranslated).
   That code runs in the Dyn process itself, never in a trusted one.
+
+  This is about crashes and mistakes, not hostile code: it keeps a Dyn
+  term the Core receives from running Dyn code there, which lowers the
+  chance that a built tool's crash takes a trusted process down. Dyn code
+  that sets out to reach a trusted process can still do so by other routes
+  (see `Rho.Dyn.Check`).
   """
 
   @max_bytes 4_000

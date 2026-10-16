@@ -4,13 +4,27 @@ defmodule Rho.Dyn.Check do
   pipeline's step 2, see `Rho.Dyn`), and `beam/2`, a second pass over the
   compiled binaries.
 
-  **Defence in depth, not a sandbox.** The BEAM has no capability isolation:
-  code that really wants to can still reach a forbidden function (an atom
-  handed to it as data and called without parentheses, a function value
-  smuggled in through a message). This check stops the obvious and the
-  accidental and makes the rest deliberate. What actually keeps the phone
-  safe is the rest of the pipeline: versioned modules, selftests in
-  contained processes, screen-lock approval, probation and automatic revert.
+  **A best-effort guard against mistakes, not a sandbox.** It is there for
+  the model's mistakes: a tool that by accident calls something it
+  shouldn't, reaches into the Core, or installs code in a process that runs
+  for others. It does not hold against code written to get around it; the
+  BEAM has no capability isolation. Known ways around it, for a host with
+  stronger needs:
+
+    * an atom handed in as data and called without parentheses, a function
+      value smuggled in through a message;
+    * raw messages to OTP's processes, a `report_cb` sent to
+      `:logger_proxy` say, which then runs Dyn code there;
+    * modules the deny-lists don't name: Logger.App (stopping Logger
+      drops `Rho.Dyn.LogGuard`), `Logger.Backends.*`, `LoggerBackends`;
+    * starting a child under a trusted supervisor (`:supervisor`,
+      `Supervisor`, `DynamicSupervisor` call the child's start function in
+      the supervisor), `:alarm_handler` (a `:gen_event` wrapper);
+    * CPU, memory and message floods.
+
+  What keeps a mistake from sticking is the rest of the pipeline: versioned
+  modules, selftests in contained processes, screen-lock approval,
+  probation and automatic revert.
 
   Source rules (each violation carries `file:line`; `<ns>` is the
   namespace, `Rho.Dyn.Config`):

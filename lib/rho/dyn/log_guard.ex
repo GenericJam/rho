@@ -10,7 +10,13 @@ defmodule Rho.Dyn.LogGuard do
   in a process every crash report of the VM goes through. This filter runs
   before the translator and, for any log event that holds a struct of a
   Dyn module (`Rho.Untrusted.untrusted?/1`), replaces the message with its
-  `Rho.Untrusted.describe/2` text. The Keeper installs it when it starts.
+  `Rho.Untrusted.describe/2` text and keeps only the metadata that holds
+  no Dyn term. The Keeper installs it when it starts.
+
+  Best effort, like `Rho.Dyn.Check`: it lowers the chance that a Dyn
+  process's crash takes a logger process down; it does not stop code that
+  sets out to reach the logger (a `report_cb` sent to `:logger_proxy` as a
+  raw message, a filter added after this one, Logger restarted without it).
   """
 
   alias Rho.Untrusted
@@ -40,7 +46,11 @@ defmodule Rho.Dyn.LogGuard do
 
   defp described(%{msg: msg} = event) do
     text = "(a log event held a Dyn term) " <> Untrusted.describe(msg, 4_000)
-    %{event | msg: {:string, text}, meta: Map.drop(event.meta, [:crash_reason, :report_cb])}
+
+    meta =
+      for {k, v} <- event.meta, k != :report_cb, clean?(k) and clean?(v), into: %{}, do: {k, v}
+
+    %{event | msg: {:string, text}, meta: meta}
   end
 
   defp clean?(term) do
@@ -59,6 +69,7 @@ defmodule Rho.Dyn.LogGuard do
 
   defp walk(%{} = map, left), do: walk_map(map, left - 1)
   defp walk([head | tail], left), do: walk_pair(head, tail, left - 1)
+  defp walk(tuple, left) when is_tuple(tuple) and tuple_size(tuple) >= left, do: 0
   defp walk(tuple, left) when is_tuple(tuple), do: walk(Tuple.to_list(tuple), left - 1)
   defp walk(_term, left), do: left - 1
 
