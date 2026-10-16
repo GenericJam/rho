@@ -186,5 +186,6 @@ defmodule Rho.Test.Tools.Details do
   @impl true
   def parameter_schema, do: %{"type" => "object"}
   @impl true
+  def run(%{"fail" => true}, _ctx), do: {:error, {:details, "no such verse", %{ref: "X 1:1"}}}
   def run(_args, _ctx), do: {:ok, {:details, "two verses", %{verses: [1, 2]}}}
 end

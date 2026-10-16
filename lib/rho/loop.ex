@@ -1112,7 +1112,10 @@ defmodule Rho.Loop do
           end
 
         tool_result =
-          Session.tool_result(call["id"], call["name"], text, is_error, images, details)
+          Session.tool_result(call["id"], call["name"], text, is_error,
+            images: images,
+            details: details
+          )
 
         {acc, entry} = persist(acc, tool_result)
         emit(acc, %{type: :message_start, entry: entry})

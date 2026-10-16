@@ -11,8 +11,10 @@ defmodule Rho.Session do
     * `model_change` (`model` as `"provider/modelId"`), first, and on a switch
     * `message` with pi's `AgentMessage` in `message`: `user`, `assistant`
       (text / thinking / image / toolCall content, `api`, `provider`,
-      `model`, `usage`, `stopReason`, `errorMessage`), `toolResult` (with
-      pi's `details` when the host keeps some, `tool_result/6`)
+      `model`, `usage`, `stopReason`, `errorMessage`; image parts in an
+      assistant message are omp's pi extension, upstream pi has none),
+      `toolResult` (with pi's `details` when the host keeps some,
+      `tool_result/5`)
     * `custom_message` (`customType` `"<ns>.notice"` / `"<ns>.error"` /
       `"<ns>.aside"`, `<ns>` being `Rho.Config.namespace/0`, `content`,
       `display`) for loop notices
@@ -268,9 +270,11 @@ defmodule Rho.Session do
   (`[%{"id", "name", "arguments"}]`), `:usage` (req_llm's usage map or nil),
   `:stop_reason` (pi's: `"stop" | "length" | "toolUse" | "error" |
   "aborted"`) and optionally `:error` and `:images` (`{mime_type, bytes}`
-  each, pictures the model made), which go in as pi's image parts after
-  the text, before the tool calls. They stay in the session for the chat;
-  `messages/2` doesn't send them back to the model.
+  each, pictures the model made), which go in as image parts (omp's pi;
+  upstream pi's assistant messages have none) after the text, before the
+  tool calls. They stay in the session for the chat; `messages/2` doesn't
+  send them back to the model (a reply that was only pictures goes as
+  "(made a picture)").
   """
   @spec assistant(map(), String.t()) :: entry()
   def assistant(reply, model) do
@@ -301,21 +305,16 @@ defmodule Rho.Session do
   end
 
   @doc """
-  A tool's result. `images` (`{mime_type, bytes}` each, a screenshot or
-  photos) go in as pi's image content parts, after the text, and on to the
-  model. `details` (JSON-encodable; nil for none) is stored as the
-  message's `details` (pi's `ToolResultMessage.details`): data for the
-  host's screens, never sent to the model.
+  A tool's result. Options: `:images` (`{mime_type, bytes}` each, a
+  screenshot or photos) go in as pi's image content parts, after the
+  text, and on to the model; `:details` (JSON-encodable; nil for none) is
+  stored as the message's `details` (pi's `ToolResultMessage.details`):
+  data for the host's screens, never sent to the model.
   """
-  @spec tool_result(
-          String.t(),
-          String.t(),
-          String.t(),
-          boolean(),
-          [{String.t(), binary()}],
-          term()
-        ) :: entry()
-  def tool_result(call_id, name, text, is_error, images \\ [], details \\ nil) do
+  @spec tool_result(String.t(), String.t(), String.t(), boolean(), keyword()) :: entry()
+  def tool_result(call_id, name, text, is_error, opts \\ []) do
+    [images: images, details: details] = Keyword.validate!(opts, images: [], details: nil)
+
     message = %{
       "role" => "toolResult",
       "toolCallId" => call_id,
@@ -554,7 +553,7 @@ defmodule Rho.Session do
       for c <- tool_calls(m),
           do: ToolCall.new(c["id"], c["name"], Jason.encode!(c["arguments"] || %{}))
 
-    text = text(m["content"])
+    text = reply_text(m["content"])
 
     if (text == "" and calls == []) or Map.has_key?(m, "retryRecovery"),
       do: [],
@@ -583,6 +582,17 @@ defmodule Rho.Session do
   end
 
   defp to_messages(_entry, _ctx), do: []
+
+  # A reply's text for the model; one that was only pictures says so (the
+  # pictures stay out).
+  defp reply_text(content) do
+    case {text(content), Enum.count(List.wrap(content), &(&1["type"] == "image"))} do
+      {"", 0} -> ""
+      {"", 1} -> "(made a picture)"
+      {"", n} -> "(made #{n} pictures)"
+      {text, _} -> text
+    end
+  end
 
   defp user_part(text, ctx) when is_binary(text), do: user_part(text_part(text), ctx)
   defp user_part(%{"type" => "text", "text" => ""}, _ctx), do: []

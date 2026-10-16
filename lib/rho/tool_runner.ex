@@ -18,7 +18,8 @@ defmodule Rho.ToolRunner do
 
   And with data for the host's screens beside what the model reads (pi's
   tool result `details`): `{:ok, {:details, output, details}}`, where
-  `output` is any of the above. The model and the session get `output`;
+  `output` is any of the above, or `{:error, {:details, reason, details}}`
+  for a failure. The model and the session get `output` (or `reason`);
   `details` goes to the loop's subscribers, with `tool_execution_end`
   (`Rho.Events`), so a screen can draw the answer (a passage, a table)
   without parsing the text, and into the session only as far as the
@@ -76,6 +77,10 @@ defmodule Rho.ToolRunner do
   end
 
   def to_result({:ok, value}), do: {:ok, to_text(value)}
+
+  def to_result({:error, {:details, reason, details}}),
+    do: {:details, {:error, to_text(reason)}, details}
+
   def to_result({:error, value}), do: {:error, to_text(value)}
 
   def to_result(other),

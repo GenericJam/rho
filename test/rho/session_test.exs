@@ -388,7 +388,9 @@ defmodule Rho.SessionTest do
     {s, _} =
       Session.append(
         s,
-        Session.tool_result("c1", "passage", "Gen 1:1", false, [], %{ref: "Gen 1:1", verses: [1]})
+        Session.tool_result("c1", "passage", "Gen 1:1", false,
+          details: %{ref: "Gen 1:1", verses: [1]}
+        )
       )
 
     {_s, _} = Session.append(s, Session.tool_result("c2", "passage", "none", false))
@@ -410,6 +412,19 @@ defmodule Rho.SessionTest do
     assert [%{type: :text, text: "Here."}] = sent.content
     assert [%{type: :text, text: "Gen 1:1"}] = result.content
     refute inspect(Session.context(entries)) =~ "verses"
+  end
+
+  test "a reply that was only pictures stays in the model's history as a note, without them",
+       %{tmp_dir: dir} do
+    reply = %{text: "", images: [{"image/png", <<1>>}, {"image/png", <<2>>}], stop_reason: "stop"}
+    s = Session.new(dir, model(), dir)
+    {s, _} = Session.append(s, Session.user("draw two"))
+    {s, _} = Session.append(s, Session.assistant(reply, model()))
+    {_s, _} = Session.append(s, Session.user("again"))
+    {:ok, _s, entries} = Session.open(s.path, model())
+
+    assert [_, %{role: :assistant, content: [%{type: :text, text: "(made 2 pictures)"}]}, _] =
+             Session.messages(entries)
   end
 
   test "lists sessions newest first, by header", %{tmp_dir: dir} do

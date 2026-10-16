@@ -158,6 +158,21 @@ defmodule Rho.LoopTest do
     refute Map.has_key?(result, "details")
   end
 
+  test "a failed tool's details go to the subscribers; the model gets its reason as an error",
+       %{tmp_dir: dir} do
+    script = [[{:tool_call, "c1", "details", %{"fail" => true}}], [{:text, "ok"}]]
+    %{loop: loop, llm: llm} = start_loop(dir, script, tools: [Rho.Test.Tools.Details])
+    :ok = Loop.prompt(loop, "look")
+    events = collect()
+
+    assert [%{text: "no such verse", is_error: true, details: %{ref: "X 1:1"}}] =
+             for(%{type: :tool_execution_end} = e <- events, do: e)
+
+    [_, second] = FakeLLM.requests(llm)
+    assert [%{role: :tool} = tool] = Enum.drop(second.messages, 2)
+    assert text_of(tool) == "no such verse"
+  end
+
   defp tool_result_messages(path) do
     {:ok, _session, entries} = Session.open(path, model())
     for %{"message" => %{"role" => "toolResult"} = m} <- entries, do: m
