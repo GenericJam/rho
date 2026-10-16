@@ -141,7 +141,8 @@ defmodule Rho.Dyn.ToolsTest do
     assert {:ok, text} = DynPropose.run(%{"rationale" => "hotter"}, %{activation_wait_ms: 5_000})
     assert text =~ "Activated: G2 is live (the human has approve all on)"
     assert Dyn.status().generation == 2
-    refute Process.alive?(activator)
+    ref = Process.monitor(activator)
+    assert_receive {:DOWN, ^ref, :process, _, reason} when reason in [:normal, :noproc]
 
     :ok = AutoApprove.disable()
     assert DynPropose.description() =~ "the human must approve it"
