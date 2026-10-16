@@ -68,7 +68,8 @@ can share it.
   `Rho.Dyn.watch/2` and `Rho.Dyn.unwatch/1` and may exit them with
   `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) to report `text`. A
   primary logger filter (`Rho.Dyn.LogGuard`) describes any log event that
-  holds a Dyn struct, so a Dyn process's crash report runs none of its code
+  holds a Dyn struct (within a 10,000-term budget; bigger events pass
+  through), so a Dyn process's crash report runs none of its code
   in `:logger_proxy`; the check refuses `:logger`, `:error_logger`,
   `:logger_backends`, `:telemetry`, `:gen_event`, `:gen_statem` and
   `Logger`'s translators, backends and configuration.

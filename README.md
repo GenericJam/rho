@@ -197,8 +197,8 @@ exits `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) is reported with
 `message/1` fails in certain ways can make OTP drop Elixir's logger
 translator VM-wide (that code runs in the Dyn process, not a Core one).
 A log event that holds a Dyn struct is described before Elixir's
-translator sees it (`Rho.Dyn.LogGuard`, installed by the Keeper), so a
-Dyn process's crash report runs none of its code in `:logger_proxy`.
+translator sees it (`Rho.Dyn.LogGuard`, installed by the Keeper; it looks
+at most 10,000 terms, and a bigger event passes through), so a Dyn process's crash report runs none of its code in `:logger_proxy`.
 `Rho.Untrusted` and `LogGuard` lower the chance that a built tool's crash
 takes a trusted process down; like the check, they are best effort.
 
