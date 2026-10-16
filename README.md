@@ -174,13 +174,15 @@ Dyn code never runs in a Core process through what it hands over
 process that crashed (a tool's task, a selftest, a compile), in a helper
 with a time and heap bound that never ends in a crash report and dies
 with its caller; the loop, the Keeper and a proposal's caller only
-describe a reason they receive (total over any term), without calling an
+describe a reason they receive (total over any term; integers past 1024
+bits print as a placeholder), without calling an
 exception's `message/1` or any protocol (`Inspect`, `String.Chars`,
 `Jason.Encoder`) a Dyn struct implements. A Dyn tool's answer and details
 become plain data (structs as maps) in its task, and its name,
-description, schema, timeout and concurrency are read once in a bounded
-throwaway process; a tool whose declaration fails is left out (one that
-ran over is read again a minute later). Crash events' `reason` stays a
+description, schema, timeout and concurrency are read in one bounded
+throwaway process and kept; a tool whose declaration fails is left out
+(one that ran over is read again after 1, 5 and 30 minutes, then stays
+out). Crash events' `reason` stays a
 string. A host watches its own Dyn processes with `Rho.Dyn.watch/2` and
 `Rho.Dyn.unwatch/1`; one that exits `{:rho_crash, text}`
 (`Rho.Untrusted.crash/3`) is reported with `text`. Known limit: a Dyn

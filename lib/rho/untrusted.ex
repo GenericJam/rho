@@ -38,6 +38,9 @@ defmodule Rho.Untrusted do
   @max_bytes 4_000
   @timeout_ms 1_000
   @max_heap_mb 32
+  # Integers past this print as a placeholder: turning a bignum into
+  # decimal is superlinear (a 4M-bit one takes half a minute).
+  @int_bound Bitwise.bsl(1, 1024)
 
   # The exit reason of a process that already formatted its crash itself
   # (`crash/3`): `exit_text/1` returns the text as it is.
@@ -54,14 +57,27 @@ defmodule Rho.Untrusted do
   @doc """
   Describes `term` without running any of its code: `inspect/2` with
   `structs: false` (a struct prints as the map it is, so no `Inspect`
-  implementation runs), cut to `max` bytes.
+  implementation runs), integers past 1024 bits as a placeholder (their
+  decimal text costs seconds), cut to `max` bytes.
   """
   @spec describe(term(), pos_integer()) :: String.t()
   def describe(term, max \\ @max_bytes) do
     term
-    |> inspect(structs: false, limit: 50, printable_limit: max, width: :infinity)
+    |> inspect(
+      structs: false,
+      limit: 50,
+      printable_limit: max,
+      width: :infinity,
+      inspect_fun: &bounded_inspect/2
+    )
     |> cap(max)
   end
+
+  defp bounded_inspect(int, _opts)
+       when is_integer(int) and (int > @int_bound or int < -@int_bound),
+       do: "#Integer<too large to print>"
+
+  defp bounded_inspect(term, opts), do: Inspect.inspect(term, opts)
 
   @doc """
   Text for an exit reason (a `:DOWN` or `:EXIT` message's), without running
@@ -96,11 +112,13 @@ defmodule Rho.Untrusted do
 
   @doc """
   A caught `kind, reason, stack` as text, as `Exception.format/3` writes
-  it (banner and stacktrace), formatted in a throwaway helper process
-  (`call/2`) so the caller's own mailbox and state stay out of reach; if
-  the helper fails or runs over `:timeout_ms` (#{@timeout_ms}),
-  `caught_text/4`. Call it in the untrusted process that caught the
-  error, never in a trusted one. Options: `:timeout_ms`, `:max` (bytes).
+  it (banner and stacktrace), formatted in a throwaway helper process so
+  the caller's own mailbox and state stay out of reach. The helper has a
+  heap limit, never ends in a crash report and dies with its caller; if
+  it fails or runs over `:timeout_ms` (#{@timeout_ms}), the term is
+  described instead (as `exit_text/2` and `describe/2` do). Call it in the
+  untrusted process that caught the error, never in a trusted one.
+  Options: `:timeout_ms`, `:max` (bytes).
   """
   @spec format(:error | :exit | :throw, term(), Exception.stacktrace(), keyword()) :: String.t()
   def format(kind, reason, stack, opts \\ []) do
@@ -146,7 +164,8 @@ defmodule Rho.Untrusted do
   # raised, threw, exited or was killed, `:timeout` if it ran over. The
   # helper catches everything and ends `:normal`, so no crash report (whose
   # formatting would run the term's code in the logger) is ever made; a
-  # watcher kills it if the caller dies first, so the time limit holds.
+  # watcher kills it if the caller dies first, so the time limit holds (it
+  # runs `fun` only once the watcher watches both).
   # The result is still the untrusted code's: check its shape before use.
   @spec call((-> result), keyword()) :: {:ok, result} | :error | :timeout when result: term()
   def call(fun, opts \\ []) when is_function(fun, 0) do
@@ -163,14 +182,20 @@ defmodule Rho.Untrusted do
           include_shared_binaries: true
         })
 
-        result =
-          try do
-            {:ok, fun.()}
-          catch
-            _, _ -> :error
-          end
+        receive do
+          :go ->
+            result =
+              try do
+                {:ok, fun.()}
+              catch
+                _, _ -> :error
+              end
 
-        send(caller, {ref, result})
+            send(caller, {ref, result})
+        after
+          # The caller died before its watcher started.
+          timeout -> :ok
+        end
       end)
 
     watch(caller, pid)
@@ -202,11 +227,13 @@ defmodule Rho.Untrusted do
   end
 
   # Kills `helper` if `caller` dies before it ends (not a link: the
-  # helper's heap-limit kill must not take the caller down).
+  # helper's heap-limit kill must not take the caller down), then lets the
+  # helper start.
   defp watch(caller, helper) do
     spawn(fn ->
       caller_ref = Process.monitor(caller)
       helper_ref = Process.monitor(helper)
+      send(helper, :go)
 
       receive do
         {:DOWN, ^helper_ref, :process, _, _} -> :ok
@@ -236,6 +263,11 @@ defmodule Rho.Untrusted do
     do: tuple |> Tuple.to_list() |> plain_list() |> List.to_tuple()
 
   def plain(fun) when is_function(fun), do: describe(fun)
+
+  # Encoding a huge integer as JSON costs what inspecting it does.
+  def plain(int) when is_integer(int) and (int > @int_bound or int < -@int_bound),
+    do: "#Integer<too large to print>"
+
   def plain(other), do: other
 
   # Improper lists too.
@@ -313,15 +345,15 @@ defmodule Rho.Untrusted do
     if proper_list?(args), do: {:ok, length(args)}, else: :error
   end
 
-  defp arity(arity) when is_integer(arity) and arity >= 0, do: {:ok, arity}
+  defp arity(arity) when is_integer(arity) and arity in 0..255, do: {:ok, arity}
   defp arity(_args), do: :error
 
   defp location?(location) do
     proper_list?(location) and
       Enum.all?(location, fn
         {:file, file} -> is_list(file) and proper_list?(file) and List.ascii_printable?(file)
-        {:line, line} -> is_integer(line)
-        {:column, column} -> is_integer(column)
+        {:line, line} -> is_integer(line) and line in 0..0xFFFFFFFF
+        {:column, column} -> is_integer(column) and column in 0..0xFFFFFFFF
         {:error_info, _} -> true
         _ -> false
       end)

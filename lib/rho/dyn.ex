@@ -46,7 +46,8 @@ defmodule Rho.Dyn do
   the Keeper and a proposal's caller only describe a reason they get,
   without an exception's `message/1` or a Dyn struct's protocols. A Dyn
   tool's answer is plain data before it leaves its task, and its
-  declaration is read once, bounded, outside the loop (see `Rho.Tool`).
+  declaration is read in a bounded process outside the loop and kept (see
+  `Rho.Tool`).
   A Dyn screen's own process runs its code, so whatever the host's screen
   layer does with its crash is the host's (mob's) business.
 

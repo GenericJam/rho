@@ -16,19 +16,22 @@ defmodule Rho.Tool do
   **Untrusted tools.** The loop reads a tool's declaration (`name/0`,
   `description/0`, `parameter_schema/0`, `timeout_ms/0`,
   `concurrency/0`) in its own process. A Dyn tool's
-  (`Rho.Untrusted.untrusted?/1`) is read instead once per module, in a
-  throwaway process with a time and heap bound, checked to be plain data
-  and kept: one whose name, description or schema raises or isn't a
+  (`Rho.Untrusted.untrusted?/1`) is read instead in one throwaway process
+  with a time and heap bound, checked to be plain data and kept for the
+  module's life: one whose name, description or schema raises or isn't a
   string / JSON Schema map is left out of what the loop offers (logged
-  once); one that runs over is left out for a minute and then read again;
-  a bad `timeout_ms/0` or `concurrency/0` means the default.
+  once), and a bad `timeout_ms/0` or `concurrency/0` means the default. A
+  read that runs over (a busy phone) leaves the tool out for now and is
+  tried again after 1, 5 and 30 minutes; after that it stays out.
   """
 
   require Logger
 
   alias Rho.Untrusted
 
-  @retry_ms 60_000
+  # When a read that ran over is tried again: after each of these, then never.
+  @retries_ms [60_000, 300_000, 1_800_000]
+  @max_timeout_ms 86_400_000
 
   @callback name() :: String.t()
   @callback description() :: String.t()
@@ -52,7 +55,7 @@ defmodule Rho.Tool do
 
   @default_timeout_ms 30_000
 
-  @typedoc "A tool's declaration, as `info/1` reads it."
+  @typedoc "A tool's declaration: its callbacks' answers, checked."
   @type info :: %{
           name: String.t(),
           description: String.t(),
@@ -121,8 +124,7 @@ defmodule Rho.Tool do
   # `module`'s declaration. A trusted module's callbacks are called as they
   # are; an untrusted one's are read in a bounded throwaway process and
   # kept (see the moduledoc): `:error` when its name, description or schema
-  # failed. A read that ran over is kept only for @retry_ms, then retried:
-  # a busy phone mustn't lose a healthy tool for its generation's life.
+  # failed, or (for now) when the read ran over.
   @spec info(module()) :: {:ok, info()} | :error
   def info(module) do
     if Untrusted.untrusted?(module) do
@@ -141,22 +143,38 @@ defmodule Rho.Tool do
 
   defp untrusted_info(key, module) do
     case :persistent_term.get(key, nil) do
-      nil -> read_and_keep(key, module)
-      {:retry_after, at} -> retry(System.monotonic_time(:millisecond) >= at, key, module)
-      info -> info
+      nil ->
+        read_and_keep(key, module, @retries_ms)
+
+      {:retry_after, at, left} ->
+        retry(System.monotonic_time(:millisecond) >= at, key, module, left)
+
+      info ->
+        info
     end
   end
 
-  defp retry(true, key, module), do: read_and_keep(key, module)
-  defp retry(false, _key, _module), do: :error
+  defp retry(true, key, module, left), do: read_and_keep(key, module, left)
+  defp retry(false, _key, _module, _left), do: :error
 
-  defp read_and_keep(key, module) do
-    case read_untrusted(module) do
-      :timeout ->
-        :persistent_term.put(key, {:retry_after, System.monotonic_time(:millisecond) + @retry_ms})
+  defp read_and_keep(key, module, retries) do
+    case {read_untrusted(module), retries} do
+      {:timeout, [wait | left]} ->
+        left_out(module, "ran over; it is read again in #{div(wait, 60_000)} min")
+
+        :persistent_term.put(
+          key,
+          {:retry_after, System.monotonic_time(:millisecond) + wait, left}
+        )
+
         :error
 
-      info ->
+      {:timeout, []} ->
+        left_out(module, "ran over again; it stays out")
+        :persistent_term.put(key, :error)
+        :error
+
+      {info, _} ->
         :persistent_term.put(key, info)
         info
     end
@@ -171,6 +189,7 @@ defmodule Rho.Tool do
     :ok
   end
 
+  # One bounded read of all five callbacks: `:timeout` if it ran over.
   defp read_untrusted(module) do
     declared =
       Untrusted.call(fn ->
@@ -179,11 +198,11 @@ defmodule Rho.Tool do
 
         # What the loop will build from it must build.
         _ = req_llm_tool(name, description, schema)
-        {name, description, schema}
+        {name, description, schema, timeout_of(module), concurrency_of(module)}
       end)
 
     case declared do
-      {:ok, {name, description, schema}}
+      {:ok, {name, description, schema, timeout, concurrency}}
       when is_binary(name) and is_binary(description) and is_map(schema) ->
         if String.valid?(name) and String.valid?(description) and json?(schema) do
           {:ok,
@@ -191,8 +210,8 @@ defmodule Rho.Tool do
              name: name,
              description: description,
              parameter_schema: schema,
-             timeout_ms: untrusted_timeout(module),
-             concurrency: untrusted_concurrency(module)
+             timeout_ms: timeout,
+             concurrency: concurrency
            }}
         else
           left_out(module, "didn't return a string / a JSON Schema map")
@@ -200,13 +219,28 @@ defmodule Rho.Tool do
         end
 
       :timeout ->
-        left_out(module, "ran over (it is tried again later)")
         :timeout
 
       _ ->
         left_out(module, "raised or didn't return a string / a JSON Schema map")
         :error
     end
+  end
+
+  # In the helper: the optional callbacks' answers, the default if absent,
+  # failing or out of range.
+  defp timeout_of(module) do
+    ms = optional(module, :timeout_ms)
+    if ms in 1..@max_timeout_ms//1, do: ms, else: @default_timeout_ms
+  end
+
+  defp concurrency_of(module),
+    do: if(optional(module, :concurrency) == :exclusive, do: :exclusive, else: :parallel)
+
+  defp optional(module, fun) do
+    if function_exported?(module, fun, 0), do: apply(module, fun, [])
+  catch
+    _, _ -> nil
   end
 
   defp left_out(module, why) do
@@ -216,30 +250,14 @@ defmodule Rho.Tool do
     )
   end
 
-  defp untrusted_timeout(module) do
-    with true <- function_exported?(module, :timeout_ms, 0),
-         {:ok, ms} when is_integer(ms) and ms > 0 <- Untrusted.call(&module.timeout_ms/0) do
-      ms
-    else
-      _ -> @default_timeout_ms
-    end
-  end
-
-  defp untrusted_concurrency(module) do
-    with true <- function_exported?(module, :concurrency, 0),
-         {:ok, :exclusive} <- Untrusted.call(&module.concurrency/0) do
-      :exclusive
-    else
-      _ -> :parallel
-    end
-  end
-
   # JSON-able plain data: no structs, tuples, funs, pids; proper lists only.
   defp json?(%{__struct__: _}), do: false
   defp json?(%{} = map), do: Enum.all?(map, fn {k, v} -> json_key?(k) and json?(v) end)
   defp json?([head | tail]), do: json?(head) and (tail == [] or (is_list(tail) and json?(tail)))
   defp json?([]), do: true
   defp json?(text) when is_binary(text), do: String.valid?(text)
+  # Integers bounded: encoding a huge one for every request would cost seconds.
+  defp json?(value) when is_integer(value), do: value in -0xFFFFFFFFFFFF..0xFFFFFFFFFFFF
   defp json?(value), do: is_number(value) or is_atom(value)
 
   defp json_key?(key) when is_binary(key), do: String.valid?(key)

@@ -440,6 +440,26 @@ defmodule Rho.Dyn.UntrustedTest do
     assert Rho.Untrusted.exit_text({e, List.duplicate({M, :f, 0, []}, 1000)}) =~ "M.f/0"
   end
 
+  test "huge integers in an exit reason or a tool's answer cost no time to describe" do
+    big = Bitwise.bsl(1, 4_000_000)
+    e = %RuntimeError{message: "x"}
+
+    for reason <- [
+          {:big, List.duplicate(big, 5)},
+          {%ArgumentError{message: big}, []},
+          {e, [{M, :f, 0, [line: big]}]},
+          {e, [{M, :f, big, []}]}
+        ] do
+      {us, text} = :timer.tc(fn -> Rho.Untrusted.exit_text(reason) end)
+      assert us < 200_000
+      assert is_binary(text)
+    end
+
+    assert Rho.Untrusted.exit_text({:big, big}) == "{:big, #Integer<too large to print>}"
+    assert Rho.Untrusted.plain(%{n: [big]}) == %{n: ["#Integer<too large to print>"]}
+    assert Rho.Untrusted.describe(12_345) == "12345"
+  end
+
   test "a Dyn exit with an improper stack takes down neither the loop nor the Keeper",
        %{tmp_dir: dir} do
     calls = [{:tool_call, "improper", "hostile", %{"mode" => "improper"}}]
@@ -494,7 +514,18 @@ defmodule Rho.Dyn.UntrustedTest do
     assert_receive {:DOWN, ^ref, :process, ^helper, :killed}, 1_000
   end
 
-  test "a Dyn tool's declaration that ran over is read again later", %{tmp_dir: dir} do
+  # Moves a retry of `tool`'s declaration read to now (instead of waiting).
+  defp retry_now(tool) do
+    {:retry_after, _at, left} = :persistent_term.get({Rho.Tool, tool})
+
+    :persistent_term.put(
+      {Rho.Tool, tool},
+      {:retry_after, System.monotonic_time(:millisecond), left}
+    )
+  end
+
+  test "a Dyn tool's declaration that ran over is read again later, a bounded number of times",
+       %{tmp_dir: dir} do
     start_keeper(dir)
     activate!(%{"hostile.ex" => @hostile, "hostile_tool.ex" => @hostile_tool})
     {:ok, tool} = Dyn.lookup({:tool, "hostile"})
@@ -502,14 +533,27 @@ defmodule Rho.Dyn.UntrustedTest do
     :persistent_term.put(@description, :loop)
     assert Rho.Tool.info(tool) == :error
     :persistent_term.put(@description, :fine)
-    # Within the retry window: still left out, not read again.
+    # Before its retry: still left out, not read again.
     assert Rho.Tool.info(tool) == :error
-
-    # Once the window has passed (moved here instead of waiting it out).
-    :persistent_term.put({Rho.Tool, tool}, {:retry_after, System.monotonic_time(:millisecond)})
+    # A busy phone, once: the next read finds it.
+    retry_now(tool)
     assert {:ok, %{description: "A hostile tool."}} = Rho.Tool.info(tool)
 
-    # A raise is deterministic: kept.
+    # A declaration that always runs over: tried 4 times, then left out for good.
+    Rho.Tool.forget([tool])
+    :persistent_term.put(@description, :loop)
+    assert Rho.Tool.info(tool) == :error
+
+    for _ <- 1..3 do
+      retry_now(tool)
+      assert Rho.Tool.info(tool) == :error
+    end
+
+    assert :persistent_term.get({Rho.Tool, tool}) == :error
+    :persistent_term.put(@description, :fine)
+    assert Rho.Tool.info(tool) == :error
+
+    # A raise is deterministic: kept at once.
     Rho.Tool.forget([tool])
     :persistent_term.put(@description, :raise)
     assert Rho.Tool.info(tool) == :error
