@@ -313,7 +313,8 @@ defmodule Rho.Session do
   """
   @spec tool_result(String.t(), String.t(), String.t(), boolean(), keyword()) :: entry()
   def tool_result(call_id, name, text, is_error, opts \\ []) do
-    [images: images, details: details] = Keyword.validate!(opts, images: [], details: nil)
+    opts = Keyword.validate!(opts, images: [], details: nil)
+    {images, details} = {opts[:images], opts[:details]}
 
     message = %{
       "role" => "toolResult",
