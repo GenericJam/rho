@@ -607,7 +607,7 @@ defmodule Rho.Dyn do
 
     The cycle: `dyn_propose` (with a one-line rationale) checks, compiles and selftests the \
     staging copy as a new generation and shows its diff. Nothing changes yet: the human \
-    approves it on the phone with the screen lock; you can't activate it yourself (if the \
+    approves it #{Rho.Config.hint(:approve)}; you can't activate it yourself (if the \
     user turned approve all on, it activates as soon as it passes: the result says \
     which). Once active \
     it is on probation: 3 crashes within 60 s, or an app launch that dies, revert it to the \

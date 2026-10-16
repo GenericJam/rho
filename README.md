@@ -104,7 +104,7 @@ them all):
 | `:system_prompt`, `:default_model` | a short generic prompt; `anthropic:claude-haiku-4-5` | the app's |
 | `:open_url` (the sign-in page) | `open` / `xdg-open` / `start` | `{Mob.Device, :open_url, []}` |
 | `:namespace` (`customType` of the loop's notices in a session) | `"rho"` | |
-| `:app_name`, `:hints` (where the user signs in or switches model, in messages) | "the app", "the app's settings" | |
+| `:app_name`, `:hints` (where the user signs in or switches model, in messages; how they approve a Dyn generation, in the agent's Dyn text) | "the app", "the app's settings", "on the phone with the screen lock" | |
 | Attachments (`t:Rho.Session.attachment/0`: pictures, text, PDFs with a user message) | none: the host builds them from its pickers and camera | |
 | Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM` | |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |

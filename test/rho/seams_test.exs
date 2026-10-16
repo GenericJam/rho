@@ -166,6 +166,18 @@ defmodule Rho.SeamsTest do
       assert Config.app_name() == "Operator"
     end
 
+    test "Dyn's agent-facing text says how the host's human approves a generation" do
+      assert Rho.Dyn.agent_guide() =~ "approves it on the phone with the screen lock"
+      assert Rho.Tools.DynPropose.description() =~ "approve it on the phone with the screen lock"
+
+      put_env(:hints, approve: "in the Workshop, with the proposal's Approve button")
+
+      for text <- [Rho.Dyn.agent_guide(), Rho.Tools.DynPropose.description()] do
+        assert text =~ "it in the Workshop, with the proposal's Approve button"
+        refute text =~ "screen lock"
+      end
+    end
+
     test "open_url: the host's function, or an MFA with the URL appended" do
       test = self()
       put_env(:open_url, fn url -> send(test, {:opened, url}) && :ok end)

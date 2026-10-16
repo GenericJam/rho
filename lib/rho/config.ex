@@ -32,7 +32,11 @@ defmodule Rho.Config do
     * `:hints`: where the user fixes a failed call, as `Rho.LLM.describe/1`
       and `Rho.Auth.Login` say it: `sign_in:` (default
       `"from the app's settings"`, as in "sign in again from …") and
-      `switch_model:` (default `"in the app's settings"`).
+      `switch_model:` (default `"in the app's settings"`); and, for Dyn
+      (`Rho.Dyn.agent_guide/0`, `dyn_propose`), `approve:`, how the human
+      approves a proposed generation (default `"on the phone with the screen
+      lock (fingerprint, face, PIN, pattern, password or passcode)"`, as
+      `Rho.Dyn.Approval.Biometric` behind an approve control).
     * `:tools`, `:tool_sources`: `Rho.ToolRegistry`'s core tools and
       registry sources, when `Rho.Supervisor` isn't given them.
     * `:dyn`: the Dyn layer (agent-written code, `Rho.Dyn`), off by
@@ -95,10 +99,15 @@ defmodule Rho.Config do
   @spec app_name() :: String.t()
   def app_name, do: Application.get_env(:rho, :app_name, "the app")
 
-  @default_hints [sign_in: "from the app's settings", switch_model: "in the app's settings"]
+  @default_hints [
+    sign_in: "from the app's settings",
+    switch_model: "in the app's settings",
+    approve:
+      "on the phone with the screen lock (fingerprint, face, PIN, pattern, password or passcode)"
+  ]
 
-  @doc "The `:hints` entry `key` (`:sign_in` or `:switch_model`)."
-  @spec hint(:sign_in | :switch_model) :: String.t()
+  @doc "The `:hints` entry `key` (`:sign_in`, `:switch_model` or `:approve`)."
+  @spec hint(:sign_in | :switch_model | :approve) :: String.t()
   def hint(key), do: Application.get_env(:rho, :hints, [])[key] || @default_hints[key]
 
   @doc """

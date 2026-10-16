@@ -32,8 +32,8 @@ defmodule Rho.Tools.DynPropose do
         "The human has turned approve all on, so a passing proposal is activated " <>
           "automatically, on probation; don't ask them to approve it.",
       else:
-        "It does NOT activate anything: the human must approve it on the phone with the " <>
-          "screen lock (fingerprint, face, PIN, pattern, password or passcode)."
+        "It does NOT activate anything: the human must approve it " <>
+          Rho.Config.hint(:approve) <> "."
   end
 
   @impl true
@@ -147,7 +147,7 @@ defmodule Rho.Tools.DynPropose do
 
   defp approval_text(_n, :ask),
     do:
-      "It is NOT active. The human has to approve it on the phone with the screen lock; " <>
+      "It is NOT active. The human has to approve it #{Rho.Config.hint(:approve)}; " <>
         "you can't activate it yourself. Once approved it runs on probation and is " <>
         "reverted automatically if it keeps crashing."
 
