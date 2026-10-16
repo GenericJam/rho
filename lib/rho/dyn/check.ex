@@ -49,7 +49,9 @@ defmodule Rho.Dyn.Check do
       and the host's `:allowed` ones, and so is the sign-in store
       (`MobSecureStore`, its NIF `:mob_secure_store_nif`); of Mob only the
       app-facing modules (screens, UI, theming, device features; the
-      `:gated` defaults), and of `Mob.Screen` not the functions that start
+      `:gated` defaults), not its native layer `:mob_nif` (Mob's Elixir
+      modules are the API, and the host decides which of them Dyn code
+      gets), and of `Mob.Screen` not the functions that start
       or drive screens outside the front (`start_root/3`, ...); the
       capability plugins (`MobCamera`, `MobLocation`, `MobSensors`,
       `MobMishka`, `MobThemes`, ...), `Nx` and `NxTfliteMob` are allowed;
@@ -114,6 +116,7 @@ defmodule Rho.Dyn.Check do
   @banned_erlang %{
     code: "loads and purges code",
     mob_secure_store_nif: "holds the sign-ins",
+    mob_nif: "is Mob's native layer: go through Mob's Elixir modules (the ones this app allows)",
     init: "stops or restarts the node",
     file: "touches the file system",
     prim_file: "touches the file system",

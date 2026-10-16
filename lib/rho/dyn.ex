@@ -595,7 +595,8 @@ defmodule Rho.Dyn do
     - Each `.ex` file holds one or more `defmodule #{ns}.<Name>`, nothing else at the \
     top level. Refer to your other modules as `#{ns}.<Name>` (an `alias` is fine).
     - `Path` is fine except `Path.wildcard`. No `File`, `System.cmd`, `Port`, `:os`, `Code`, \
-    `Module`, `:code`, `Node`; no tracing, suspending or listing processes; no \
+    `Module`, `:code`, `Node`, `:mob_nif` (use Mob's modules); no tracing, suspending or \
+    listing processes; no \
     `:persistent_term.put`; no `defmacro`, `quote` or `unquote`; no `apply`/`spawn` on a \
     module held in a variable; no `String.to_atom`. None of the app's own modules except \
     #{allowed}.

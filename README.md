@@ -159,6 +159,12 @@ Its seams (`Rho.Dyn.Config` documents each):
 | `:guide`: the host's rules in `Rho.Dyn.agent_guide/0` | none | its file roots, menu rows |
 | `Rho.Dyn.Seed`: default sources the host ships, merged with the user's on each new version | none | its default front |
 
+The default check keeps Dyn code to Mob's Elixir modules: Mob's native
+layer `:mob_nif` is banned (`banned_erlang`), so what Dyn code can do on the
+device is what the host's `:gated` and `:allowed` lists give it. A host
+whose Dyn code must call it drops the ban with
+`check: [banned_erlang: %{mob_nif: nil}]`.
+
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that
 strips them can't use Dyn.

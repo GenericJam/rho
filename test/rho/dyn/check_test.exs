@@ -106,6 +106,9 @@ defmodule Rho.Dyn.CheckTest do
       {"Mob.Renderer.render(%{}, :android)", "app-facing"},
       {"Mob.Composite.register(:column, {TestHost.Dyn.Probe, :go})", "app-facing"},
       {"Mob.Storage.write(:documents, \"x\", \"y\")", "Mob.Storage"},
+      # Mob's native layer: Dyn code goes through Mob's modules, which the host gates.
+      {":mob_nif.clipboard_put(\"x\")", ":mob_nif.clipboard_put/1, which is Mob's native layer"},
+      {"f = &:mob_nif.screenshot/3", "Mob's native layer"},
       {":mob_secure_store_nif.store_get(\"anthropic\")", "sign-ins"},
       {"MobSecureStore.get(\"anthropic\")", "sign-ins"},
       {"Rho.CredentialStore.get(\"anthropic\")", "the Core's own code"},
