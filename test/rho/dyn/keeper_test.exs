@@ -438,16 +438,21 @@ defmodule Rho.Dyn.KeeperTest do
     assert [%{type: "load_failed", gen: ^bad}] = Dyn.log()
   end
 
-  # A proven tool generation whose selftest reads two flags: sleep that
-  # long, and fail. Dyn code may only name Dyn modules, so they're atoms.
+  # A proven tool generation whose selftest reads three flags: wait while
+  # the hold is on (a background rebuild then can't finish until the test
+  # lets it), sleep that long, and fail. Dyn code may only name Dyn
+  # modules, so they're atoms.
+  @hold :rho_dyn_keeper_test_hold_selftest
   @slow :rho_dyn_keeper_test_slow_selftest
   @fail :rho_dyn_keeper_test_fail_selftest
 
   defp proven_for_rebuild!(dir, opts) do
-    on_exit(fn -> Enum.each([@slow, @fail], &:persistent_term.erase/1) end)
+    on_exit(fn -> Enum.each([@hold, @slow, @fail], &:persistent_term.erase/1) end)
 
     selftest =
-      "(Process.sleep(:persistent_term.get(#{inspect(@slow)}, 0)); " <>
+      "(hold = fn f -> if :persistent_term.get(#{inspect(@hold)}, false), " <>
+        "do: (Process.sleep(10); f.(f)), else: :ok end; hold.(hold); " <>
+        "Process.sleep(:persistent_term.get(#{inspect(@slow)}, 0)); " <>
         "if :persistent_term.get(#{inspect(@fail)}, false), do: {:error, :broken}, else: :ok)"
 
     start_keeper(dir, opts)
@@ -500,17 +505,19 @@ defmodule Rho.Dyn.KeeperTest do
        %{tmp_dir: dir} do
     n = proven_for_rebuild!(dir, probation_ms: 20)
     built_by_an_older_app(dir, n)
-    :persistent_term.put(@slow, 1_000)
+    # The rebuild this launch starts can't finish: the next relaunch stops it.
+    :persistent_term.put(@hold, true)
 
     assert %{rebuilding: true} = relaunch(dir, stable: true, probation_ms: 20)
     Keeper.first_render(Keeper, nil)
     :ok = Keeper.mark_stable(Keeper)
     assert %{boot_attempts: 1, stable: false} = Store.boot_markers(dir)
 
-    # It died mid-rebuild: the next launch counts it, and rebuilds again;
-    # stable comes once that rebuild is over.
-    :persistent_term.put(@slow, 0)
+    # It died mid-rebuild: the next launch counts it, and rebuilds again
+    # (let through once it has started); stable comes once that rebuild is
+    # over.
     assert %{failed_launches: 1, rebuilding: true} = relaunch(dir, probation_ms: 20)
+    :persistent_term.put(@hold, false)
     Keeper.first_render(Keeper, nil)
     :ok = Dyn.await_rebuild()
     _ = Dyn.status()
