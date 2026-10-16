@@ -69,8 +69,9 @@ can share it.
   `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) to report `text`. A
   primary logger filter (`Rho.Dyn.LogGuard`) describes any log event that
   holds a Dyn struct, so a Dyn process's crash report runs none of its code
-  in `:logger_proxy`; the check refuses `:logger`, `:telemetry`,
-  `:gen_event` and `Logger`'s translators and configuration.
+  in `:logger_proxy`; the check refuses `:logger`, `:error_logger`,
+  `:logger_backends`, `:telemetry`, `:gen_event`, `:gen_statem` and
+  `Logger`'s translators, backends and configuration.
 - **Threat model**: the static check (`Rho.Dyn.Check`) is a best-effort
   deny-list against the model's mistakes, not a sandbox against hostile
   code; `Rho.Untrusted` and `Rho.Dyn.LogGuard` lower the chance that a

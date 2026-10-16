@@ -54,7 +54,8 @@ defmodule Rho.Dyn.Check do
       `:persistent_term` only to read (`put` / `erase` change VM-wide state
       and trigger a global GC);
     * nothing that installs code to run in other processes: `:logger`,
-      `:error_logger`, `:telemetry`, `:gen_event`, and `Logger`'s
+      `:error_logger`, `:logger_backends`, `:telemetry`, `:gen_event`,
+      `:gen_statem` (it calls any OTP server), and `Logger`'s
       translators, backends and configuration (`Logger.info/1` and friends
       are fine); a Dyn process's own crash report is kept out of the
       logger's processes by `Rho.Dyn.LogGuard`;

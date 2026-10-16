@@ -572,4 +572,21 @@ defmodule Rho.Dyn.UntrustedTest do
     refute Enum.any?(receive_probes([]), fn {_hook, pid} -> pid == proxy end)
     assert Process.info(proxy, :current_function) != {:current_function, {mod, :message, 1}}
   end
+
+  test "the log filter passes host structs through untouched and drops Dyn terms from metadata",
+       %{tmp_dir: dir} do
+    mod = hostile(dir)
+    me = self()
+    stream = Stream.map([1, 2], &send(me, {:ran, &1}))
+    host = %{msg: {:report, %{reason: %ArgumentError{message: "host"}, s: stream}}, meta: %{}}
+    assert Rho.Dyn.LogGuard.filter(host, nil) == host
+    refute_received {:ran, _}
+
+    dyn = %{msg: {:string, "x"}, meta: %{user_id: struct(mod, mode: :plain), pid: me}}
+
+    assert %{msg: {:string, "(a log event held a Dyn term) " <> _}, meta: meta} =
+             Rho.Dyn.LogGuard.filter(dyn, nil)
+
+    assert meta == %{pid: me}
+  end
 end

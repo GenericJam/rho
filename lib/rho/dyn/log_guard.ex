@@ -11,7 +11,9 @@ defmodule Rho.Dyn.LogGuard do
   before the translator and, for any log event that holds a struct of a
   Dyn module (`Rho.Untrusted.untrusted?/1`), replaces the message with its
   `Rho.Untrusted.describe/2` text and keeps only the metadata that holds
-  no Dyn term. The Keeper installs it when it starts.
+  no Dyn term. It reads terms as data (no protocol of any struct runs) and
+  looks at most 10,000 terms of an event; a bigger event is let through
+  unchecked. The Keeper installs it when it starts.
 
   Best effort, like `Rho.Dyn.Check`: it lowers the chance that a Dyn
   process's crash takes a logger process down; it does not stop code that
@@ -22,7 +24,7 @@ defmodule Rho.Dyn.LogGuard do
   alias Rho.Untrusted
 
   @id :rho_dyn_terms
-  # Terms looked at per event; past this the event is described anyway.
+  # Terms looked at per event; an event bigger than this is let through.
   @budget 10_000
 
   @doc "Installs the filter (once; a second call is a no-op)."
@@ -37,9 +39,14 @@ defmodule Rho.Dyn.LogGuard do
   @doc false
   # The filter: the event as it is, or with a described message.
   def filter(%{msg: msg, meta: meta} = event, _arg) do
-    if clean?(msg) and clean?(meta), do: event, else: described(event)
+    if scan({msg, meta}) == :dyn, do: described(event), else: event
   catch
-    _, _ -> %{event | msg: {:string, "(a log event rho could not check)"}}
+    _, _ ->
+      %{
+        event
+        | msg: {:string, "(a log event rho could not check)"},
+          meta: Map.take(meta, [:time, :pid, :gl, :domain])
+      }
   end
 
   def filter(event, _arg), do: event
@@ -48,39 +55,49 @@ defmodule Rho.Dyn.LogGuard do
     text = "(a log event held a Dyn term) " <> Untrusted.describe(msg, 4_000)
 
     meta =
-      for {k, v} <- event.meta, k != :report_cb, clean?(k) and clean?(v), into: %{}, do: {k, v}
+      for {k, v} <- event.meta, k != :report_cb, scan({k, v}) == :clean, into: %{}, do: {k, v}
 
     %{event | msg: {:string, text}, meta: meta}
   end
 
-  defp clean?(term) do
+  # :clean, :dyn (holds a Dyn struct), or :over (too big to look through
+  # within the budget; let through as it is).
+  defp scan(term) do
     case walk(term, @budget) do
-      :dyn -> false
-      left -> left > 0
+      :dyn -> :dyn
+      left when left > 0 -> :clean
+      _ -> :over
     end
   end
 
-  # Remaining budget, or :dyn on a Dyn struct.
+  # Remaining budget, or :dyn on a Dyn struct. Maps (structs too) are
+  # walked with a map iterator: no protocol of a struct runs, and a big map
+  # is never copied whole.
   defp walk(_term, left) when left <= 0, do: 0
 
   defp walk(%{__struct__: module} = map, left) when is_atom(module) do
-    if Untrusted.untrusted?(module), do: :dyn, else: walk_map(map, left - 1)
+    if Untrusted.untrusted?(module), do: :dyn, else: walk_iter(:maps.iterator(map), left - 1)
   end
 
-  defp walk(%{} = map, left), do: walk_map(map, left - 1)
+  defp walk(%{} = map, left), do: walk_iter(:maps.iterator(map), left - 1)
   defp walk([head | tail], left), do: walk_pair(head, tail, left - 1)
   defp walk(tuple, left) when is_tuple(tuple) and tuple_size(tuple) >= left, do: 0
   defp walk(tuple, left) when is_tuple(tuple), do: walk(Tuple.to_list(tuple), left - 1)
   defp walk(_term, left), do: left - 1
 
-  defp walk_map(map, left) do
-    Enum.reduce_while(map, left, fn {k, v}, left ->
-      case walk_pair(k, v, left) do
-        :dyn -> {:halt, :dyn}
-        left when left <= 0 -> {:halt, 0}
-        left -> {:cont, left}
-      end
-    end)
+  defp walk_iter(_iter, left) when left <= 0, do: 0
+
+  defp walk_iter(iter, left) do
+    case :maps.next(iter) do
+      :none ->
+        left
+
+      {k, v, next} ->
+        case walk_pair(k, v, left) do
+          :dyn -> :dyn
+          left -> walk_iter(next, left)
+        end
+    end
   end
 
   defp walk_pair(a, b, left) do
