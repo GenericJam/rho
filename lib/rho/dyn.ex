@@ -595,8 +595,7 @@ defmodule Rho.Dyn do
     - Each `.ex` file holds one or more `defmodule #{ns}.<Name>`, nothing else at the \
     top level. Refer to your other modules as `#{ns}.<Name>` (an `alias` is fine).
     - `Path` is fine except `Path.wildcard`. No `File`, `System.cmd`, `Port`, `:os`, `Code`, \
-    `Module`, `:code`, `Node`, `:mob_nif` (use Mob's modules); no tracing, suspending or \
-    listing processes; no \
+    `Module`, `:code`, `Node`#{nif_rule()}; no tracing, suspending or listing processes; no \
     `:persistent_term.put`; no `defmacro`, `quote` or `unquote`; no `apply`/`spawn` on a \
     module held in a variable; no `String.to_atom`. None of the app's own modules except \
     #{allowed}.
@@ -623,6 +622,13 @@ defmodule Rho.Dyn do
       nil -> ""
       text -> "\n" <> text
     end
+  end
+
+  # The guide names the ban on Mob's native layer only while the check has it.
+  defp nif_rule do
+    if Map.has_key?(Check.policy().banned_erlang, :mob_nif),
+      do: ", `:mob_nif` (use Mob's modules)",
+      else: ""
   end
 
   defp with_dir(keeper, default, fun) do

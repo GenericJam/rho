@@ -242,6 +242,10 @@ defmodule Rho.Dyn.Keeper do
   @impl true
   def init(opts) do
     :ok = Config.validate!()
+    # The runtime generations are built for is the Core as this launch
+    # started it: fixed now, before code hot-loaded later (a dev deploy, an
+    # IEx session) can count in it (`Rho.Dyn.Compiler.runtime/0`).
+    _ = Compiler.runtime()
     name = Keyword.fetch!(opts, :name)
     dir = Keyword.get_lazy(opts, :dir, &Store.default_root/0)
     File.mkdir_p!(dir)

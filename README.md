@@ -160,10 +160,12 @@ Its seams (`Rho.Dyn.Config` documents each):
 | `Rho.Dyn.Seed`: default sources the host ships, merged with the user's on each new version | none | its default front |
 
 The default check keeps Dyn code to Mob's Elixir modules: Mob's native
-layer `:mob_nif` is banned (`banned_erlang`), so what Dyn code can do on the
-device is what the host's `:gated` and `:allowed` lists give it. A host
-whose Dyn code must call it drops the ban with
-`check: [banned_erlang: %{mob_nif: nil}]`.
+layer `:mob_nif` is banned (`banned_erlang`, and as a value in `forging`,
+so it can't be held in a variable and called), and the host's `:gated` and
+`:allowed` lists say which of Mob's modules Dyn code may use. The check is
+defence in depth, not a sandbox (`Rho.Dyn.Check`). A host whose Dyn code
+must call it drops both:
+`check: [banned_erlang: %{mob_nif: nil}, forging: %{mob_nif: nil}]`.
 
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that

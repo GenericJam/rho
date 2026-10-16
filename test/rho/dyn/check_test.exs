@@ -109,6 +109,9 @@ defmodule Rho.Dyn.CheckTest do
       # Mob's native layer: Dyn code goes through Mob's modules, which the host gates.
       {":mob_nif.clipboard_put(\"x\")", ":mob_nif.clipboard_put/1, which is Mob's native layer"},
       {"f = &:mob_nif.screenshot/3", "Mob's native layer"},
+      # Held in a variable, a native layer could be called without parentheses.
+      {"nif = :mob_nif\n    nif.exit_app", ":mob_nif is Mob's native layer"},
+      {"store = :mob_secure_store_nif", ":mob_secure_store_nif holds the sign-ins"},
       {":mob_secure_store_nif.store_get(\"anthropic\")", "sign-ins"},
       {"MobSecureStore.get(\"anthropic\")", "sign-ins"},
       {"Rho.CredentialStore.get(\"anthropic\")", "the Core's own code"},

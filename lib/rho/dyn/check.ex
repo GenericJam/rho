@@ -43,7 +43,9 @@ defmodule Rho.Dyn.Check do
       to the front host as a native reply, so a front screen sending to it
       could forge a capability grant (a picked file); nor `:mob_file_result`,
       the tag of a raw native file result, which the front host decodes and
-      grants when one arrives (`:forging`);
+      grants when one arrives; nor the native layers `:mob_nif` and
+      `:mob_secure_store_nif` as values, since one held in a variable could
+      be called without parentheses (`:forging`, atoms Dyn code may not hold);
     * the Core's own modules (`Rho.*` and the host's `:core` prefixes) are
       off limits except `Rho.Tool` (the behaviour a Dyn tool implements)
       and the host's `:allowed` ones, and so is the sign-in store
@@ -170,13 +172,21 @@ defmodule Rho.Dyn.Check do
     :persistent_term => ~w(put erase)a
   }
 
-  # Atoms front code could forge a native reply with (a capability grant).
+  # Atoms Dyn code may not hold at all: the router's name and the raw
+  # native result's tag (front code could forge a native reply, a
+  # capability grant), and the native layers banned above, which an atom
+  # in a variable would still reach (`nif = :mob_nif; nif.exit_app`: a
+  # call without parentheses on a variable can't be told from a map
+  # field, so the call check lets it through).
   @forging %{
     mob_screen:
       ":mob_screen is the router: native replies reach a front screen only through its host",
     mob_file_result:
       ":mob_file_result is native's own reply: the front host decodes it, so match the " <>
-        "decoded message ({:audio, :recorded, %{path: ...}}, ...)"
+        "decoded message ({:audio, :recorded, %{path: ...}}, ...)",
+    mob_nif:
+      ":mob_nif is Mob's native layer: go through Mob's Elixir modules (the ones this app allows)",
+    mob_secure_store_nif: ":mob_secure_store_nif holds the sign-ins"
   }
 
   # `Mob.Wake.register(id, trigger, {Mod, :fun})` / `{Mod, :fun, args}`

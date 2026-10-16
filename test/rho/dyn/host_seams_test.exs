@@ -218,6 +218,7 @@ defmodule Rho.Dyn.HostSeamsTest do
     assert guide =~ "`use Notebook.Card` with `show/1`"
     assert guide =~ "except `Rho.Tool`, `Notebook.Api`, `Notebook.Card`."
     assert guide =~ "Notes are the user's: never delete one."
+    assert guide =~ "`:mob_nif` (use Mob's modules)"
   end
 
   test "a host that doesn't use Dyn: no Dyn process, tool or source", %{tmp_dir: dir} do
@@ -277,7 +278,8 @@ defmodule Rho.Dyn.HostSeamsTest do
       check: [
         banned: %{File => nil},
         gated: %{Mob => [Mob.UI]},
-        banned_erlang: %{notebook_nif: "holds the sign-ins"}
+        banned_erlang: %{notebook_nif: "holds the sign-ins", mob_nif: nil},
+        forging: %{mob_nif: nil}
       ]
     )
 
@@ -289,5 +291,8 @@ defmodule Rho.Dyn.HostSeamsTest do
     assert m =~ "is not one of Mob's app-facing modules"
     assert {:error, [%{message: m}]} = run.("def x, do: :notebook_nif.get(1)")
     assert m =~ "holds the sign-ins"
+    # A host whose Dyn code calls Mob's native layer drops its ban; the guide follows.
+    assert {:ok, _} = run.("def x, do: :mob_nif.platform()")
+    refute Dyn.agent_guide() =~ ":mob_nif"
   end
 end

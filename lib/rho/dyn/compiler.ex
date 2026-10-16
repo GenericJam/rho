@@ -960,7 +960,11 @@ defmodule Rho.Dyn.Compiler do
 
   defp words(mb), do: div(mb * 1024 * 1024, :erlang.system_info(:wordsize))
 
+  # The app's `.app` may not be loaded yet (a host whose own start hasn't
+  # run): load it first, or the version reads as unknown.
   defp app_vsn(app) do
+    _ = Application.load(app)
+
     case Application.spec(app, :vsn) do
       nil -> "unknown"
       vsn -> to_string(vsn)
