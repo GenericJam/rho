@@ -9,7 +9,7 @@ defmodule Rho.Dyn.Selftest do
     * a **tool** (`Rho.Tool`) must name itself (`[a-z][a-z0-9_]*`),
       describe itself, declare a parameter schema and pass its `selftest/0`,
       which a Dyn tool must define;
-    * a **screen** (the host's `Rho.Dyn.Screens.screen?/1`) must pass the
+    * a **screen** (the host's `c:Rho.Dyn.Screens.screen?/1`) must pass the
       host's screen test (`c:Rho.Dyn.Screens.selftest/1`; mob's mounts it
       on a test socket and renders a view tree);
     * any other module just has to have loaded.

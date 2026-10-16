@@ -552,7 +552,7 @@ defmodule Rho.Loop do
       session_id: s.session.id,
       system_prompt: s.opts[:system_prompt] || Rho.Config.system_prompt(),
       messages: Session.context(entries, inputs(s)),
-      tools: s |> offered() |> Map.values() |> Enum.map(&Tool.to_req_llm/1),
+      tools: for(m <- Map.values(offered(s)), t <- [Tool.to_req_llm(m)], t != nil, do: t),
       max_tokens: s.opts.max_tokens
     }
   end

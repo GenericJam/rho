@@ -17,16 +17,18 @@ defmodule Rho.Tool do
   `description/0`, `parameter_schema/0`, `timeout_ms/0`,
   `concurrency/0`) in its own process. A Dyn tool's
   (`Rho.Untrusted.untrusted?/1`) is read instead once per module, in a
-  throwaway process with a time and heap bound (`Rho.Untrusted.call/2`),
-  checked to be plain data and kept (`info/1`): one whose name,
-  description or schema raises, runs over or isn't a string / JSON
-  Schema map is left out of what the loop offers (logged once), and a
-  bad `timeout_ms/0` or `concurrency/0` means the default.
+  throwaway process with a time and heap bound, checked to be plain data
+  and kept: one whose name, description or schema raises or isn't a
+  string / JSON Schema map is left out of what the loop offers (logged
+  once); one that runs over is left out for a minute and then read again;
+  a bad `timeout_ms/0` or `concurrency/0` means the default.
   """
 
   require Logger
 
   alias Rho.Untrusted
+
+  @retry_ms 60_000
 
   @callback name() :: String.t()
   @callback description() :: String.t()
@@ -100,10 +102,9 @@ defmodule Rho.Tool do
     _, _ -> :parallel
   end
 
-  @doc """
-  The name the loop offers `module` under: its `name/0`, or for an
-  untrusted tool `info/1`'s, nil when that failed (the tool is left out).
-  """
+  @doc false
+  # The name the loop offers `module` under: its `name/0`, or for an
+  # untrusted tool `info/1`'s, nil when that failed (the tool is left out).
   @spec offered_name(module()) :: String.t() | nil
   def offered_name(module) do
     if Untrusted.untrusted?(module) do
@@ -116,26 +117,16 @@ defmodule Rho.Tool do
     end
   end
 
-  @doc """
-  `module`'s declaration. A trusted module's callbacks are called as they
-  are; an untrusted one's are read once in a bounded throwaway process and
-  kept (see the moduledoc): `:error` when its name, description or schema
-  failed.
-  """
+  @doc false
+  # `module`'s declaration. A trusted module's callbacks are called as they
+  # are; an untrusted one's are read in a bounded throwaway process and
+  # kept (see the moduledoc): `:error` when its name, description or schema
+  # failed. A read that ran over is kept only for @retry_ms, then retried:
+  # a busy phone mustn't lose a healthy tool for its generation's life.
   @spec info(module()) :: {:ok, info()} | :error
   def info(module) do
     if Untrusted.untrusted?(module) do
-      key = {__MODULE__, module}
-
-      case :persistent_term.get(key, nil) do
-        nil ->
-          info = read_untrusted(module)
-          :persistent_term.put(key, info)
-          info
-
-        info ->
-          info
-      end
+      untrusted_info({__MODULE__, module}, module)
     else
       {:ok,
        %{
@@ -148,10 +139,32 @@ defmodule Rho.Tool do
     end
   end
 
-  @doc """
-  Drops what `info/1` kept of `modules` (the Dyn compiler calls it when it
-  unloads them).
-  """
+  defp untrusted_info(key, module) do
+    case :persistent_term.get(key, nil) do
+      nil -> read_and_keep(key, module)
+      {:retry_after, at} -> retry(System.monotonic_time(:millisecond) >= at, key, module)
+      info -> info
+    end
+  end
+
+  defp retry(true, key, module), do: read_and_keep(key, module)
+  defp retry(false, _key, _module), do: :error
+
+  defp read_and_keep(key, module) do
+    case read_untrusted(module) do
+      :timeout ->
+        :persistent_term.put(key, {:retry_after, System.monotonic_time(:millisecond) + @retry_ms})
+        :error
+
+      info ->
+        :persistent_term.put(key, info)
+        info
+    end
+  end
+
+  @doc false
+  # Drops what `info/1` kept of `modules` (the Dyn compiler calls it when
+  # it unloads them).
   @spec forget([module()]) :: :ok
   def forget(modules) do
     for module <- modules, do: :persistent_term.erase({__MODULE__, module})
@@ -182,21 +195,25 @@ defmodule Rho.Tool do
              concurrency: untrusted_concurrency(module)
            }}
         else
-          left_out(module)
+          left_out(module, "didn't return a string / a JSON Schema map")
+          :error
         end
 
+      :timeout ->
+        left_out(module, "ran over (it is tried again later)")
+        :timeout
+
       _ ->
-        left_out(module)
+        left_out(module, "raised or didn't return a string / a JSON Schema map")
+        :error
     end
   end
 
-  defp left_out(module) do
+  defp left_out(module, why) do
     Logger.warning(
       "[tool] #{inspect(module)} is left out: its name/0, description/0 or " <>
-        "parameter_schema/0 raised, ran over, or didn't return a string / a JSON Schema map"
+        "parameter_schema/0 " <> why
     )
-
-    :error
   end
 
   defp untrusted_timeout(module) do
@@ -217,10 +234,11 @@ defmodule Rho.Tool do
     end
   end
 
-  # JSON-able plain data: no structs, tuples, funs, pids.
+  # JSON-able plain data: no structs, tuples, funs, pids; proper lists only.
   defp json?(%{__struct__: _}), do: false
   defp json?(%{} = map), do: Enum.all?(map, fn {k, v} -> json_key?(k) and json?(v) end)
-  defp json?(list) when is_list(list), do: Enum.all?(list, &json?/1)
+  defp json?([head | tail]), do: json?(head) and (tail == [] or (is_list(tail) and json?(tail)))
+  defp json?([]), do: true
   defp json?(text) when is_binary(text), do: String.valid?(text)
   defp json?(value), do: is_number(value) or is_atom(value)
 
@@ -237,15 +255,17 @@ defmodule Rho.Tool do
   end
 
   @doc """
-  The req_llm declaration sent to the model. Execution never goes through
-  req_llm's callback: the loop runs tools itself (in parallel, gated,
-  with timeouts). An untrusted tool's comes from `info/1` (call it only
-  for a tool `offered_name/1` names).
+  The req_llm declaration sent to the model, nil for an untrusted tool
+  whose declaration failed (it isn't offered). Execution never goes
+  through req_llm's callback: the loop runs tools itself (in parallel,
+  gated, with timeouts).
   """
-  @spec to_req_llm(module()) :: ReqLLM.Tool.t()
+  @spec to_req_llm(module()) :: ReqLLM.Tool.t() | nil
   def to_req_llm(module) do
-    {:ok, info} = info(module)
-    req_llm_tool(info.name, info.description, info.parameter_schema)
+    case info(module) do
+      {:ok, info} -> req_llm_tool(info.name, info.description, info.parameter_schema)
+      :error -> nil
+    end
   end
 
   defp req_llm_tool(name, description, schema) do

@@ -44,9 +44,11 @@ name the pi source each piece follows.
 
 ```elixir
 def deps do
-  [{:rho, github: "GenericJam/rho"}]
+  [{:rho, "~> 0.1"}]
 end
 ```
+
+Until 0.1.0 is on Hex, use the GitHub repo: `{:rho, github: "GenericJam/rho"}`.
 
 ## A minimal host
 
@@ -168,15 +170,23 @@ must call it drops both:
 `check: [banned_erlang: %{mob_nif: nil}, forging: %{mob_nif: nil}]`.
 
 Dyn code never runs in a Core process through what it hands over
-(`Rho.Untrusted`). A crash is formatted in the process that crashed (a
-tool's task, a selftest, a compile), time- and heap-bounded; the loop, the
-Keeper and a proposal's caller only describe a reason they receive, without
-calling an exception's `message/1` or any protocol (`Inspect`,
-`String.Chars`, `Jason.Encoder`) a Dyn struct implements. A Dyn tool's
-answer and details become plain data (structs as maps) in its task, and its
-name, description, schema, timeout and concurrency are read once in a
-bounded throwaway process; a tool whose declaration fails is left out. Crash
-events' `reason` stays a string.
+(`Rho.Untrusted`). A crash is formatted, with its stacktrace, in the
+process that crashed (a tool's task, a selftest, a compile), in a helper
+with a time and heap bound that never ends in a crash report and dies
+with its caller; the loop, the Keeper and a proposal's caller only
+describe a reason they receive (total over any term), without calling an
+exception's `message/1` or any protocol (`Inspect`, `String.Chars`,
+`Jason.Encoder`) a Dyn struct implements. A Dyn tool's answer and details
+become plain data (structs as maps) in its task, and its name,
+description, schema, timeout and concurrency are read once in a bounded
+throwaway process; a tool whose declaration fails is left out (one that
+ran over is read again a minute later). Crash events' `reason` stays a
+string. A host watches its own Dyn processes with `Rho.Dyn.watch/2` and
+`Rho.Dyn.unwatch/1`; one that exits `{:rho_crash, text}`
+(`Rho.Untrusted.crash/3`) is reported with `text`. Known limit: a Dyn
+process crashing with an exception whose `message/1` fails in certain
+ways can make OTP drop Elixir's logger translator VM-wide (that code runs
+in the Dyn process, not a Core one).
 
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that
@@ -197,5 +207,5 @@ OAuth and usage endpoints are answered in-process.
 
 ## License
 
-MIT, see [LICENSE](LICENSE), which also carries pi's copyright notice for
+MIT, see [LICENSE](https://github.com/GenericJam/rho/blob/master/LICENSE), which also carries pi's copyright notice for
 the ported parts.

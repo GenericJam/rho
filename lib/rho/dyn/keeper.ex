@@ -31,9 +31,9 @@ defmodule Rho.Dyn.Keeper do
   **Launches** (`boot/2`, once per app start). `boot.json` counts the
   launches since the last one that reached stable (`mark_stable/1`). In the
   app a launch is stable once its first frame was drawn (the host's
-  `Rho.Dyn.Screens.after_first_render/1`) and then either
+  `c:Rho.Dyn.Screens.after_first_render/1`) and then either
   `:stable_delay_ms` passed or the app went to the background (the user
-  left it, `Rho.Dyn.Screens.left_app?/1`: a quick close is not a failed
+  left it, `c:Rho.Dyn.Screens.left_app?/1`: a quick close is not a failed
   launch; a crash before the first frame or within the delay is). If the
   previous launch never got there and
   the current generation is still unproven, it is reverted before anything

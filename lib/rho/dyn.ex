@@ -46,7 +46,7 @@ defmodule Rho.Dyn do
   the Keeper and a proposal's caller only describe a reason they get,
   without an exception's `message/1` or a Dyn struct's protocols. A Dyn
   tool's answer is plain data before it leaves its task, and its
-  declaration (`Rho.Tool.info/1`) is read once, bounded, outside the loop.
+  declaration is read once, bounded, outside the loop (see `Rho.Tool`).
   A Dyn screen's own process runs its code, so whatever the host's screen
   layer does with its crash is the host's (mob's) business.
 
@@ -106,7 +106,7 @@ defmodule Rho.Dyn do
   The Dyn step of the host's boot: loads the current generation (or
   decides on boot probation / safe mode, see `Rho.Dyn.Keeper`) and has the
   first rendered frame start the clock to "stable" (the host's
-  `Rho.Dyn.Screens.after_first_render/1`). `opts` go to
+  `c:Rho.Dyn.Screens.after_first_render/1`). `opts` go to
   `Rho.Dyn.Keeper.boot/2` (`core:`, `core_rolled_back:`).
   """
   @spec boot(keyword()) :: Keeper.boot_report()
@@ -567,12 +567,22 @@ defmodule Rho.Dyn do
   @doc """
   Has the app's Keeper watch `pid` if `module` is Dyn code, so its crash
   counts against the generation (`Rho.ToolRunner` calls this for every
-  tool call, through `Rho.Dyn.Source`). A no-op for Core modules.
+  tool call, through `Rho.Dyn.Source`; a host calls it for a process of
+  its own that runs Dyn code, a screen say). Its abnormal exit is a
+  crash; exiting with `{:rho_crash, text}` (`Rho.Untrusted.crash/3`)
+  reports `text` as it is. A no-op for Core modules.
   """
   @spec watch(pid(), module()) :: :ok
   def watch(pid, module) do
     if dyn_module?(module), do: Keeper.watch(@keeper, pid, module), else: :ok
   end
+
+  @doc """
+  Stops watching `pid` (`watch/2`): its exit is no longer a crash, for a
+  host that stops a process it watched in an orderly way.
+  """
+  @spec unwatch(pid()) :: :ok
+  def unwatch(pid), do: Keeper.unwatch(@keeper, pid)
 
   @spec dyn_module?(module()) :: boolean()
   def dyn_module?(module), do: Compiler.generation_of(module) != nil

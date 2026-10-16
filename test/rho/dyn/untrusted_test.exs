@@ -43,6 +43,7 @@ defmodule Rho.Dyn.UntrustedTest do
 
     def act(:loop), do: Process.sleep(:infinity)
     def act(:raise), do: raise(ArgumentError, "hostile code raised")
+    def act(:throw_struct), do: throw(%__MODULE__{message: "thrown", mode: :loop})
 
     def act(:exit),
       do: exit({%__MODULE__{message: "from message/1", mode: :loop}, [{__MODULE__, :act, 1, []}]})
@@ -127,6 +128,11 @@ defmodule Rho.Dyn.UntrustedTest do
       Process.sleep(:infinity)
     end
 
+    def run(%{"mode" => "improper"}, _ctx) do
+      spawn_link(fn -> exit({%RuntimeError{message: "improper"}, [:a | :b]}) end)
+      Process.sleep(:infinity)
+    end
+
     def run(%{"mode" => "output"}, _ctx), do: {:ok, %Hostile{message: "out", mode: :loop}}
     def run(%{"mode" => "error"}, _ctx), do: {:error, %Hostile{message: "err", mode: :loop}}
 
@@ -160,6 +166,7 @@ defmodule Rho.Dyn.UntrustedTest do
     def crash(:raise), do: raise(Hostile, message: "screen boom", mode: :loop)
     def crash(:exit), do: exit(%Hostile{message: "screen exit", mode: :loop})
     def crash(:bytes), do: raise(<<255, 254>>)
+    def crash(:improper), do: exit({%RuntimeError{message: "improper"}, [:a | :b]})
   end
   """
 
@@ -204,9 +211,10 @@ defmodule Rho.Dyn.UntrustedTest do
     events = collect(5_000)
     results = results(events)
 
-    # The task formats its own crash: the agent reads what message/1 says.
-    assert results["plain"] ==
-             {"Tool crashed: ** (TestHost.Dyn.G1.Hostile) hostile message/1", true}
+    # The task formats its own crash: the agent reads what message/1 says,
+    # and the stack.
+    assert {"Tool crashed: ** (TestHost.Dyn.G1.Hostile) hostile message/1\n" <> _, true} =
+             results["plain"]
 
     # message/1 hangs (raise_loop) or exits with another hostile exception
     # (raise_exit) while the task formats it: its fields are used instead.
@@ -409,5 +417,103 @@ defmodule Rho.Dyn.UntrustedTest do
     assert reason =~ "the compiler process died: ** (TestHost.Dyn.G"
     assert reason =~ "Hostile) linked compile"
     assert probes_from([caller, self()]) == []
+  end
+
+  test "exit_text/2 is total: improper lists, odd entries, deep and huge terms" do
+    e = %RuntimeError{message: "x"}
+
+    for reason <- [
+          {e, [:a | :b]},
+          {e, [{M, :f, [1 | 2], []}]},
+          {e, [{M, :f, 1, [file: ~c"a.ex", line: 1] ++ :tail}]},
+          {e, [{M, :f, 1, [file: [?a | ?b]]}]},
+          {e, [{fn -> :ok end, [1 | 2], []}]},
+          [:a | :b],
+          Enum.reduce(1..100_000, :leaf, &[&1 | &2]),
+          Enum.reduce(1..10_000, :leaf, &{&1, &2})
+        ] do
+      text = Rho.Untrusted.exit_text(reason, 300)
+      assert is_binary(text) and String.valid?(text) and byte_size(text) <= 300
+    end
+
+    assert Rho.Untrusted.exit_text({e, [:a | :b]}) =~ "** (RuntimeError) x"
+    assert Rho.Untrusted.exit_text({e, List.duplicate({M, :f, 0, []}, 1000)}) =~ "M.f/0"
+  end
+
+  test "a Dyn exit with an improper stack takes down neither the loop nor the Keeper",
+       %{tmp_dir: dir} do
+    calls = [{:tool_call, "improper", "hostile", %{"mode" => "improper"}}]
+    %{loop: loop} = hostile_loop(dir, calls)
+    keeper = Process.whereis(Keeper)
+    :ok = Loop.prompt(loop, "go")
+    events = collect(5_000)
+
+    assert {"Tool crashed: ** (RuntimeError) improper\n" <> _, true} = results(events)["improper"]
+    assert List.last(events).reason == :done
+    assert Process.alive?(loop)
+
+    # A watched Dyn process (a screen, say) exiting the same way: a crash, described.
+    activate!(%{"hostile.ex" => @hostile, "fragile.ex" => @fragile})
+    :ok = Dyn.subscribe()
+    {:ok, mod} = Dyn.lookup({:screen, "Fragile"})
+    {pid, ref} = spawn_monitor(fn -> receive(do: (:crash -> mod.crash(:improper))) end)
+    :ok = Dyn.watch(pid, mod)
+    send(pid, :crash)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+    assert %{kind: :crash, reason: "** (RuntimeError) improper" <> _} = await_dyn(:crash)
+    assert Process.whereis(Keeper) == keeper
+  end
+
+  defp hostile(dir) do
+    start_keeper(dir)
+    n = activate!(%{"hostile.ex" => @hostile})
+    Module.concat(["TestHost.Dyn.G#{n}.Hostile"])
+  end
+
+  test "a helper whose formatting fails ends quietly: no Dyn code runs in the logger",
+       %{tmp_dir: dir} do
+    mod = hostile(dir)
+    # message/1 throws a Dyn struct; were the helper to die with that error,
+    # the crash report's translation would inspect it in :logger_proxy.
+    e = struct(mod, message: "m", mode: :throw_struct)
+
+    assert Rho.Untrusted.format(:error, e, []) == "** (#{inspect(mod)}) m"
+    Process.sleep(300)
+    assert [{:message, helper}] = receive_probes([])
+    refute helper == self()
+  end
+
+  test "a helper dies with its caller, so its time limit holds", %{tmp_dir: dir} do
+    mod = hostile(dir)
+    e = struct(mod, message: "m", mode: :loop)
+    caller = spawn(fn -> Rho.Untrusted.format(:error, e, [], timeout_ms: 60_000) end)
+
+    assert_receive {:probe, :message, helper}, 1_000
+    ref = Process.monitor(helper)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^helper, :killed}, 1_000
+  end
+
+  test "a Dyn tool's declaration that ran over is read again later", %{tmp_dir: dir} do
+    start_keeper(dir)
+    activate!(%{"hostile.ex" => @hostile, "hostile_tool.ex" => @hostile_tool})
+    {:ok, tool} = Dyn.lookup({:tool, "hostile"})
+
+    :persistent_term.put(@description, :loop)
+    assert Rho.Tool.info(tool) == :error
+    :persistent_term.put(@description, :fine)
+    # Within the retry window: still left out, not read again.
+    assert Rho.Tool.info(tool) == :error
+
+    # Once the window has passed (moved here instead of waiting it out).
+    :persistent_term.put({Rho.Tool, tool}, {:retry_after, System.monotonic_time(:millisecond)})
+    assert {:ok, %{description: "A hostile tool."}} = Rho.Tool.info(tool)
+
+    # A raise is deterministic: kept.
+    Rho.Tool.forget([tool])
+    :persistent_term.put(@description, :raise)
+    assert Rho.Tool.info(tool) == :error
+    :persistent_term.put(@description, :fine)
+    assert Rho.Tool.info(tool) == :error
   end
 end

@@ -13,19 +13,26 @@ defmodule Rho.Untrusted do
 
     * `format/3` turns a caught raise, throw or exit into text **in the
       untrusted process that caught it** (a tool's task, a selftest, a
-      compile), in a throwaway helper with a time and heap bound; if that
-      fails or runs over, it falls back to `describe/1`;
+      compile), in a throwaway helper with a time and heap bound that
+      never ends in a crash report and dies with its caller; if that
+      fails or runs over, it falls back to describing the term;
+    * `crash/3` does that and exits with `{:rho_crash, text}`, the exit
+      reason a host's own untrusted processes can use so a watcher (the
+      Keeper, say) reports the text as it is;
     * `describe/1` and `exit_text/1` describe any term without running
       anything of it: no protocol of its structs, no exception message
       callback (an exception's `:message` field is read as data). That is
       what a trusted process uses for a term it still receives, a `:DOWN`
-      reason say;
+      reason say. Both are total;
     * `plain/1` turns a Dyn tool's answer into plain data (no structs, no
-      funs) before it leaves the task;
-    * `call/2` runs untrusted code (a Dyn tool's `description/0`) for a
-      trusted caller in a throwaway helper, with the same bounds.
+      funs) before it leaves the task.
 
   Every text is valid UTF-8 and at most `max` bytes (4000 by default).
+
+  One limit stays the host's: a Dyn process that crashes with an
+  exception whose `message/1` fails in certain ways can make OTP remove
+  Elixir's logger translator VM-wide (later crash logs are untranslated).
+  That code runs in the Dyn process itself, never in a trusted one.
   """
 
   @max_bytes 4_000
@@ -62,42 +69,53 @@ defmodule Rho.Untrusted do
   `** (Module) message` and the stack (the `:message` field when it is a
   string, else the exception's fields), a reason a process formatted
   itself (`crash/3`) as that text, anything else as `describe/1` does.
+  Total: any term gives a text (improper lists, odd stack entries and
+  deep or huge terms are described, cut to `max`).
   """
   @spec exit_text(term(), pos_integer()) :: String.t()
-  def exit_text(reason, max \\ @max_bytes)
+  def exit_text(reason, max \\ @max_bytes) do
+    exception_text(reason, max)
+  catch
+    _, _ -> safe_describe(reason, max)
+  end
 
-  def exit_text({@crash_tag, text}, max) when is_binary(text), do: cap(text, max)
+  defp exception_text({@crash_tag, text}, max) when is_binary(text), do: cap(text, max)
 
-  def exit_text({%{__exception__: true, __struct__: module} = exception, stack}, max)
-      when is_atom(module) and is_list(stack) do
+  defp exception_text({%{__exception__: true, __struct__: module} = exception, stack}, max)
+       when is_atom(module) and is_list(stack) do
     cap("** (#{inspect(module)}) #{message_field(exception, max)}#{stack_text(stack, max)}", max)
   end
 
-  def exit_text(reason, max), do: describe(reason, max)
+  defp exception_text(reason, max), do: describe(reason, max)
+
+  defp safe_describe(reason, max) do
+    describe(reason, max)
+  catch
+    _, _ -> "an exit reason rho could not describe"
+  end
 
   @doc """
-  A caught `kind, reason` as text, as `Exception.format_banner/3` writes
-  it, formatted in a throwaway helper process (`call/2`) so the caller's
-  own mailbox and state stay out of reach; if the helper fails or runs
-  over `:timeout_ms` (#{@timeout_ms}), `caught_text/4`. Call it in the
-  untrusted process that caught the error, never in a trusted one.
-  Options: `:timeout_ms`, `:max` (bytes).
+  A caught `kind, reason, stack` as text, as `Exception.format/3` writes
+  it (banner and stacktrace), formatted in a throwaway helper process
+  (`call/2`) so the caller's own mailbox and state stay out of reach; if
+  the helper fails or runs over `:timeout_ms` (#{@timeout_ms}),
+  `caught_text/4`. Call it in the untrusted process that caught the
+  error, never in a trusted one. Options: `:timeout_ms`, `:max` (bytes).
   """
   @spec format(:error | :exit | :throw, term(), Exception.stacktrace(), keyword()) :: String.t()
   def format(kind, reason, stack, opts \\ []) do
     max = Keyword.get(opts, :max, @max_bytes)
 
-    case call(fn -> Exception.format_banner(kind, reason, stack) end, opts) do
-      {:ok, text} when is_binary(text) -> cap(text, max)
+    case call(fn -> Exception.format(kind, reason, stack) end, opts) do
+      {:ok, text} when is_binary(text) -> text |> String.trim_trailing() |> cap(max)
       _ -> caught_text(kind, reason, stack, max)
     end
   end
 
-  @doc """
-  `kind, reason` as text without running any of its code (`exit_text/1`
-  for an error, `describe/1` for the rest): for a trusted process that
-  caught something it can't vouch for.
-  """
+  @doc false
+  # `kind, reason` as text without running any of its code (`exit_text/1`
+  # for an error, `describe/1` for the rest): for a trusted process that
+  # caught something it can't vouch for.
   @spec caught_text(:error | :exit | :throw, term(), Exception.stacktrace(), pos_integer()) ::
           String.t()
   def caught_text(kind, reason, stack, max \\ @max_bytes)
@@ -122,13 +140,15 @@ defmodule Rho.Untrusted do
 
   def crash(kind, reason, stack), do: exit({@crash_tag, format(kind, reason, stack)})
 
-  @doc """
-  Runs `fun` in a throwaway process with a heap limit (#{@max_heap_mb} MB)
-  and a time limit (`:timeout_ms`, #{@timeout_ms}): `{:ok, result}`, or
-  `:error` if it raised, exited, ran over or was killed. The result is
-  still the untrusted code's: check its shape before use.
-  """
-  @spec call((-> result), keyword()) :: {:ok, result} | :error when result: term()
+  @doc false
+  # Runs `fun` in a throwaway process with a heap limit (@max_heap_mb MB)
+  # and a time limit (`:timeout_ms`): `{:ok, result}`, `:error` if it
+  # raised, threw, exited or was killed, `:timeout` if it ran over. The
+  # helper catches everything and ends `:normal`, so no crash report (whose
+  # formatting would run the term's code in the logger) is ever made; a
+  # watcher kills it if the caller dies first, so the time limit holds.
+  # The result is still the untrusted code's: check its shape before use.
+  @spec call((-> result), keyword()) :: {:ok, result} | :error | :timeout when result: term()
   def call(fun, opts \\ []) when is_function(fun, 0) do
     timeout = Keyword.get(opts, :timeout_ms, @timeout_ms)
     caller = self()
@@ -139,16 +159,26 @@ defmodule Rho.Untrusted do
         Process.flag(:max_heap_size, %{
           size: div(@max_heap_mb * 1024 * 1024, :erlang.system_info(:wordsize)),
           kill: true,
-          error_logger: false
+          error_logger: false,
+          include_shared_binaries: true
         })
 
-        send(caller, {ref, fun.()})
+        result =
+          try do
+            {:ok, fun.()}
+          catch
+            _, _ -> :error
+          end
+
+        send(caller, {ref, result})
       end)
+
+    watch(caller, pid)
 
     receive do
       {^ref, result} ->
         Process.demonitor(mref, [:flush])
-        {:ok, result}
+        result
 
       {:DOWN, ^mref, :process, ^pid, _reason} ->
         :error
@@ -167,8 +197,24 @@ defmodule Rho.Untrusted do
           0 -> :ok
         end
 
-        :error
+        :timeout
     end
+  end
+
+  # Kills `helper` if `caller` dies before it ends (not a link: the
+  # helper's heap-limit kill must not take the caller down).
+  defp watch(caller, helper) do
+    spawn(fn ->
+      caller_ref = Process.monitor(caller)
+      helper_ref = Process.monitor(helper)
+
+      receive do
+        {:DOWN, ^helper_ref, :process, _, _} -> :ok
+        {:DOWN, ^caller_ref, :process, _, _} -> Process.exit(helper, :kill)
+      end
+    end)
+
+    :ok
   end
 
   @doc """
@@ -197,10 +243,9 @@ defmodule Rho.Untrusted do
   defp plain_list([]), do: []
   defp plain_list(tail), do: plain(tail)
 
-  @doc """
-  `text` cut to `max` bytes at a character boundary, invalid UTF-8
-  replaced: safe to log, encode as JSON or show.
-  """
+  @doc false
+  # `text` cut to `max` bytes at a character boundary, invalid UTF-8
+  # replaced: safe to log, encode as JSON or show.
   @spec cap(binary(), pos_integer()) :: String.t()
   def cap(text, max \\ @max_bytes)
 
@@ -228,10 +273,16 @@ defmodule Rho.Untrusted do
     end
   end
 
-  defp stack_text(stack, max) do
-    lines = for entry <- Enum.take(stack, 20), do: "\n    " <> stack_entry(entry, max)
-    Enum.join(lines)
-  end
+  # At most 20 entries; an improper tail ends the walk and is described.
+  defp stack_text(stack, max), do: stack_lines(stack, 20, max, [])
+
+  defp stack_lines([entry | rest], left, max, acc) when left > 0,
+    do: stack_lines(rest, left - 1, max, ["\n    " <> stack_entry(entry, max) | acc])
+
+  defp stack_lines(tail, _left, max, acc) when tail != [] and not is_list(tail),
+    do: ["\n    " <> describe(tail, max) | acc] |> Enum.reverse() |> Enum.join()
+
+  defp stack_lines(_rest, _left, _max, acc), do: acc |> Enum.reverse() |> Enum.join()
 
   # Only well-formed entries go through `Exception.format_stacktrace_entry/1`,
   # with the arguments reduced to their count (formatting them would inspect
@@ -258,17 +309,25 @@ defmodule Rho.Untrusted do
 
   defp stack_entry(entry, max), do: describe(entry, max)
 
-  defp arity(args) when is_list(args), do: {:ok, length(args)}
+  defp arity(args) when is_list(args) do
+    if proper_list?(args), do: {:ok, length(args)}, else: :error
+  end
+
   defp arity(arity) when is_integer(arity) and arity >= 0, do: {:ok, arity}
   defp arity(_args), do: :error
 
   defp location?(location) do
-    Enum.all?(location, fn
-      {:file, file} -> is_list(file) and List.ascii_printable?(file)
-      {:line, line} -> is_integer(line)
-      {:column, column} -> is_integer(column)
-      {:error_info, _} -> true
-      _ -> false
-    end)
+    proper_list?(location) and
+      Enum.all?(location, fn
+        {:file, file} -> is_list(file) and proper_list?(file) and List.ascii_printable?(file)
+        {:line, line} -> is_integer(line)
+        {:column, column} -> is_integer(column)
+        {:error_info, _} -> true
+        _ -> false
+      end)
   end
+
+  defp proper_list?([_ | tail]), do: proper_list?(tail)
+  defp proper_list?([]), do: true
+  defp proper_list?(_), do: false
 end

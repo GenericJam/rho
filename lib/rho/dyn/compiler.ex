@@ -428,7 +428,7 @@ defmodule Rho.Dyn.Compiler do
 
   @doc """
   Fully unloads modules nothing runs (a candidate's): purge, delete, purge;
-  what the loop kept of their tool declarations goes too (`Rho.Tool.forget/1`).
+  what the loop kept of their tool declarations goes too.
   """
   @spec purge([module()]) :: :ok
   def purge(mods) do
@@ -690,8 +690,17 @@ defmodule Rho.Dyn.Compiler do
           include_shared_binaries: true
         })
 
-        :ok = Trace.guard(n, parent, guard)
-        send(parent, {ref, compile_files(files, n, Keyword.get(opts, :reuse))})
+        result =
+          try do
+            :ok = Trace.guard(n, parent, guard)
+            compile_files(files, n, Keyword.get(opts, :reuse))
+          catch
+            # Never an error report (its formatting would run Dyn terms'
+            # code in the logger): an exit with the text, read back below.
+            kind, reason -> exit({:rho_crash, Untrusted.format(kind, reason, __STACKTRACE__)})
+          end
+
+        send(parent, {ref, result})
       end)
 
     receive do

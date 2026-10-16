@@ -53,11 +53,16 @@ can share it.
   Core, a shipped seed (`Rho.Dyn.Seed`) and mob screens
   (`Rho.Dyn.Screens.Mob`).
 - **Untrusted terms** (`Rho.Untrusted`): nothing Dyn code hands over runs
-  its code in a Core process. Crashes are formatted where they happened
-  (a tool's task, a selftest's or compile's process), time- and
-  heap-bounded; the loop, the Keeper and a proposal's caller only describe
-  the exit reasons they receive, never calling an exception's `message/1`
-  or a Dyn struct's `Inspect`, `String.Chars` or `Jason.Encoder`. A Dyn
-  tool's answer and details are plain data (structs as maps) before they
-  leave its task, and its declaration is read once, bounded, outside the
-  loop (`Rho.Tool.info/1`); a tool whose declaration fails is left out.
+  its code in a Core process. Crashes are formatted, with their stack,
+  where they happened (a tool's task, a selftest's or compile's process),
+  in a helper with a time and heap bound that ends without a crash report
+  and dies with its caller; the loop, the Keeper and a proposal's caller
+  only describe the exit reasons they receive (total over any term,
+  improper lists included), never calling an exception's `message/1` or a
+  Dyn struct's `Inspect`, `String.Chars` or `Jason.Encoder`. A Dyn tool's
+  answer and details are plain data (structs as maps) before they leave
+  its task, and its declaration is read once, bounded, outside the loop;
+  a tool whose declaration fails is left out, one that ran over is read
+  again a minute later. Hosts watch their own Dyn processes with
+  `Rho.Dyn.watch/2` and `Rho.Dyn.unwatch/1` and may exit them with
+  `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) to report `text`.
