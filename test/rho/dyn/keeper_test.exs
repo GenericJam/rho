@@ -156,10 +156,16 @@ defmodule Rho.Dyn.KeeperTest do
     n = activate!(tools())
     :ok = Dyn.subscribe()
 
-    assert {%RuntimeError{message: "boom"}, _} = call_tool("boom")
+    # The task formats its crash itself; the Keeper gets the text.
+    assert {:rho_crash, "** (RuntimeError) boom"} = call_tool("boom")
 
-    assert %{gen: ^n, module: "TestHost.Dyn.Boom", kind: :crash, status: :probation} =
-             await_dyn(:crash)
+    assert %{
+             gen: ^n,
+             module: "TestHost.Dyn.Boom",
+             kind: :crash,
+             status: :probation,
+             reason: "** (RuntimeError) boom"
+           } = await_dyn(:crash)
 
     call_tool("boom")
     await_dyn(:crash)

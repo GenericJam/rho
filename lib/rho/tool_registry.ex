@@ -120,9 +120,16 @@ defmodule Rho.ToolRegistry do
     {:reply, :ok, state}
   end
 
+  # A Dyn module's name is read bounded, not in this process (`Rho.Tool.offered_name/1`).
   defp put(module) do
-    true = :ets.insert(@table, {module.name(), module})
-    :ok
+    case Tool.offered_name(module) do
+      nil ->
+        {:error, :not_a_tool}
+
+      name ->
+        true = :ets.insert(@table, {name, module})
+        :ok
+    end
   end
 end
 

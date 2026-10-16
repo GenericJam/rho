@@ -17,7 +17,9 @@ defmodule Rho.Dyn.Keeper do
   `Rho.ToolRunner` and `Rho.Dyn.Source`, screens through the wrapper the
   compiler adds to their entry function, `Rho.Dyn.Screens`). An abnormal
   exit (crash, kill, timeout) is written to the
-  log and sent to subscribers as `{:rho_dyn, %{type: :crash, ...}}`.
+  log and sent to subscribers as `{:rho_dyn, %{type: :crash, ...}}`, its
+  `reason` a string that describes the exit without running any of it
+  (`Rho.Untrusted.exit_text/2`).
   3 crashes of the current generation within 60 s while it is on probation
   revert it to its parent (`%{type: :reverted, crashes: [...]}`, the crash
   reports the agent fixes from): the parent is loaded first (generation 0,
@@ -94,6 +96,7 @@ defmodule Rho.Dyn.Keeper do
   alias Rho.Dyn.Config
   alias Rho.Dyn.Generation
   alias Rho.Dyn.Store
+  alias Rho.Untrusted
 
   require Logger
 
@@ -741,7 +744,10 @@ defmodule Rho.Dyn.Keeper do
           try do
             Compiler.rebuild(root, gen, opts)
           catch
-            kind, reason -> {:error, Exception.format(kind, reason, __STACKTRACE__)}
+            # Linked to the Keeper: nothing caught here runs.
+            kind, reason ->
+              {:error,
+               "the rebuild crashed: " <> Untrusted.caught_text(kind, reason, __STACKTRACE__)}
           end
 
         send(keeper, {:rebuilt, ref, result})
@@ -1006,7 +1012,8 @@ defmodule Rho.Dyn.Keeper do
         gen: n,
         module: Compiler.logical(mod),
         kind: if(reason == :killed, do: :killed, else: :crash),
-        reason: reason |> Exception.format_exit() |> String.slice(0, 2000),
+        # A Dyn process's exit reason: described, nothing of it runs here.
+        reason: Untrusted.exit_text(reason, 2000),
         status: if(n == s.current, do: s.current_status, else: :old)
       }
 

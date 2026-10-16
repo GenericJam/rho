@@ -16,12 +16,16 @@ defmodule Rho.Dyn.Selftest do
 
   Any module that also exports `selftest/0` gets it run too (`:ok` passes).
   When the test process finishes, processes linked to it go down with it.
+  A failure is formatted inside the test process (`Rho.Untrusted.format/4`)
+  and the caller only takes strings back; a test process that dies
+  otherwise is described, not formatted (`Rho.Untrusted.exit_text/2`).
   """
 
   alias Rho.Dyn.Compiler
   alias Rho.Dyn.Config
   alias Rho.Dyn.Generation
   alias Rho.Tool
+  alias Rho.Untrusted
 
   @default_timeout_ms 5_000
   @default_max_heap_mb 64
@@ -132,9 +136,10 @@ defmodule Rho.Dyn.Selftest do
 
         result =
           try do
-            fun.()
+            plain_result(fun.())
           catch
-            kind, reason -> {:error, Exception.format_banner(kind, reason, __STACKTRACE__)}
+            # Formatted here, in the test's own process (bounded).
+            kind, reason -> {:error, Untrusted.format(kind, reason, __STACKTRACE__)}
           end
 
         send(parent, {ref, result})
@@ -145,13 +150,14 @@ defmodule Rho.Dyn.Selftest do
     receive do
       {^ref, result} ->
         Process.demonitor(mref, [:flush])
-        result
+        plain_result(result)
 
       {:DOWN, ^mref, :process, ^pid, :killed} ->
         {:error, "killed: used more than #{heap_mb} MB of heap"}
 
+      # Any other end of the test process: its reason is described, never run.
       {:DOWN, ^mref, :process, ^pid, reason} ->
-        {:error, "exited: " <> Exception.format_exit(reason)}
+        {:error, "exited: " <> Untrusted.exit_text(reason)}
     after
       timeout ->
         Process.exit(pid, :kill)
@@ -163,4 +169,14 @@ defmodule Rho.Dyn.Selftest do
         {:error, "timed out after #{timeout} ms"}
     end
   end
+
+  # What a check may answer, as plain strings; anything else is a failure.
+  defp plain_result({:ok, detail, name} = ok)
+       when is_binary(detail) and (is_binary(name) or is_nil(name)),
+       do: ok
+
+  defp plain_result({:error, detail}) when is_binary(detail), do: {:error, Untrusted.cap(detail)}
+
+  defp plain_result(other),
+    do: {:error, "the selftest answered #{Untrusted.describe(other, 200)}"}
 end

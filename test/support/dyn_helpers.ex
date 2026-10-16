@@ -37,20 +37,18 @@ defmodule Rho.Test.Dyn do
 
   @doc """
   Purges every loaded module of the namespace (`Rho.Dyn.Config`) and every protocol
-  implementation for a generation's module (a fresh VM, as far as Dyn goes).
+  implementation for a generation's module (a fresh VM, as far as Dyn goes),
+  and what `Rho.Tool.info/1` kept of them (the next test reuses the names).
   """
   def purge_all do
     prefix = "Elixir.#{Config.namespace_name()}."
 
-    for {mod, _} <- :code.all_loaded(),
-        String.starts_with?(Atom.to_string(mod), prefix) or
-          Compiler.generation_of(mod) != nil do
-      :code.purge(mod)
-      :code.delete(mod)
-      :code.purge(mod)
-    end
-
-    :ok
+    :code.all_loaded()
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.filter(fn mod ->
+      String.starts_with?(Atom.to_string(mod), prefix) or Compiler.generation_of(mod) != nil
+    end)
+    |> Compiler.purge()
   end
 
   @doc "Starts the app-named Keeper on `dir` (supervised by the test) and boots it."

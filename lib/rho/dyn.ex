@@ -40,6 +40,16 @@ defmodule Rho.Dyn do
   the loop sees Dyn tools through `Rho.ToolRegistry` (`Rho.Dyn.Source`),
   from the next model call after a switch.
 
+  **No Dyn code in a Core process** through what Dyn hands over
+  (`Rho.Untrusted`): crashes are formatted where they happened (the tool's
+  task, the selftest's or the compile's process, bounded), and the loop,
+  the Keeper and a proposal's caller only describe a reason they get,
+  without an exception's `message/1` or a Dyn struct's protocols. A Dyn
+  tool's answer is plain data before it leaves its task, and its
+  declaration (`Rho.Tool.info/1`) is read once, bounded, outside the loop.
+  A Dyn screen's own process runs its code, so whatever the host's screen
+  layer does with its crash is the host's (mob's) business.
+
   Dyn compiles Elixir on the device: the app must ship the Elixir compiler
   (`:elixir`'s compiler modules and `:compiler`), so no slim build that
   strips them.

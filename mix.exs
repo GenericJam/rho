@@ -11,6 +11,9 @@ defmodule Rho.MixProject do
       elixir: "~> 1.18",
       start_permanent: false,
       elixirc_paths: elixirc_paths(Mix.env()),
+      # Unconsolidated in tests, as on a host that doesn't consolidate: a Dyn
+      # module's `defimpl` then dispatches, which the Rho.Untrusted tests need.
+      consolidate_protocols: Mix.env() != :test,
       deps: deps(),
       description:
         "An agent core for Elixir apps: pi-agent-core's loop, omp/pi JSONL sessions, " <>
@@ -49,11 +52,11 @@ defmodule Rho.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv mix.exs README.md LICENSE)
+      files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
   defp docs do
-    [main: "readme", extras: ["README.md"], source_ref: "v#{@version}"]
+    [main: "readme", extras: ["README.md", "CHANGELOG.md"], source_ref: "v#{@version}"]
   end
 end

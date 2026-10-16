@@ -13,7 +13,10 @@ defmodule Rho.Dyn.Compiler do
 
   **Containment.** The compile runs in its own process with a timeout and a
   `max_heap_size` (module bodies run at compile time). If it fails, every
-  module of generation `n` it loaded is purged: nothing runs them.
+  module of generation `n` it loaded is purged: nothing runs them. Its
+  errors are formatted in that process (`Rho.Untrusted.format/4`) and its
+  diagnostics come back as plain strings; if it dies, its exit reason is
+  only described (`Rho.Untrusted.exit_text/2`).
 
   **Screens report to the Keeper.** Each screen module (as the host's
   `Rho.Dyn.Screens` tells them: mob's `use Mob.Screen` with a `mount/3`)
@@ -36,6 +39,7 @@ defmodule Rho.Dyn.Compiler do
   alias Rho.Dyn.Selftest
   alias Rho.Dyn.Store
   alias Rho.Dyn.Trace
+  alias Rho.Untrusted
 
   require Logger
 
@@ -422,7 +426,10 @@ defmodule Rho.Dyn.Compiler do
     end
   end
 
-  @doc "Fully unloads modules nothing runs (a candidate's): purge, delete, purge."
+  @doc """
+  Fully unloads modules nothing runs (a candidate's): purge, delete, purge;
+  what the loop kept of their tool declarations goes too (`Rho.Tool.forget/1`).
+  """
   @spec purge([module()]) :: :ok
   def purge(mods) do
     Enum.each(mods, fn mod ->
@@ -430,6 +437,8 @@ defmodule Rho.Dyn.Compiler do
       :code.delete(mod)
       :code.purge(mod)
     end)
+
+    Rho.Tool.forget(mods)
   end
 
   @doc """
@@ -455,6 +464,7 @@ defmodule Rho.Dyn.Compiler do
       :in_use
     else
       Enum.each(mods, &:code.delete/1)
+      :ok = Rho.Tool.forget(mods)
       {:ok, purge_old(mods)}
     end
   end
@@ -691,7 +701,8 @@ defmodule Rho.Dyn.Compiler do
 
       {:DOWN, ^mref, :process, ^pid, reason} ->
         purge(loaded(n))
-        {:error, {:compile, "the compiler process died: #{Exception.format_exit(reason)}"}}
+        # The compile ran Dyn code (module bodies): its exit reason is described, never run.
+        {:error, {:compile, "the compiler process died: #{Untrusted.exit_text(reason)}"}}
     after
       timeout ->
         Process.exit(pid, :kill)
@@ -715,8 +726,33 @@ defmodule Rho.Dyn.Compiler do
     {us, {result, diagnostics}} =
       :timer.tc(fn -> Code.with_diagnostics(fn -> compile_all(files, n, reuse) end) end)
 
-    {result, div(us, 1000), diagnostics}
+    {result, div(us, 1000), Enum.flat_map(diagnostics, &plain_diagnostic/1)}
   end
+
+  # What the Core reads of a diagnostic, as plain data (made in the compile
+  # process: module bodies ran Dyn code there).
+  defp plain_diagnostic(%{severity: severity, message: message} = d)
+       when is_atom(severity) and is_binary(message) do
+    position =
+      case d[:position] do
+        {line, col} when is_integer(line) and is_integer(col) -> {line, col}
+        line when is_integer(line) -> line
+        _ -> nil
+      end
+
+    file = if is_binary(d[:file]), do: d[:file]
+
+    [
+      %{
+        severity: severity,
+        message: String.replace_invalid(message),
+        file: file,
+        position: position
+      }
+    ]
+  end
+
+  defp plain_diagnostic(_other), do: []
 
   defp compile_all(files, n, nil) do
     with {:ok, modules, deps} <- rounds(files, [], %{}, n), do: {:ok, modules, deps, []}
@@ -784,7 +820,8 @@ defmodule Rho.Dyn.Compiler do
           kind, reason ->
             keep = MapSet.new(done ++ Enum.flat_map(ok, &elem(&1, 1)), &elem(&1, 0))
             purge(Enum.reject(loaded(n), &MapSet.member?(keep, &1)))
-            {ok, [{f, Exception.format_banner(kind, reason, __STACKTRACE__)} | failed]}
+            # In the compile process (the module bodies' own), bounded.
+            {ok, [{f, Untrusted.format(kind, reason, __STACKTRACE__)} | failed]}
         end
       end)
 

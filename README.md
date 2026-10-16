@@ -167,6 +167,17 @@ defence in depth, not a sandbox (`Rho.Dyn.Check`). A host whose Dyn code
 must call it drops both:
 `check: [banned_erlang: %{mob_nif: nil}, forging: %{mob_nif: nil}]`.
 
+Dyn code never runs in a Core process through what it hands over
+(`Rho.Untrusted`). A crash is formatted in the process that crashed (a
+tool's task, a selftest, a compile), time- and heap-bounded; the loop, the
+Keeper and a proposal's caller only describe a reason they receive, without
+calling an exception's `message/1` or any protocol (`Inspect`,
+`String.Chars`, `Jason.Encoder`) a Dyn struct implements. A Dyn tool's
+answer and details become plain data (structs as maps) in its task, and its
+name, description, schema, timeout and concurrency are read once in a
+bounded throwaway process; a tool whose declaration fails is left out. Crash
+events' `reason` stays a string.
+
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that
 strips them can't use Dyn.

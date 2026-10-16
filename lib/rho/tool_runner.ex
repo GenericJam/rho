@@ -7,10 +7,19 @@ defmodule Rho.ToolRunner do
   which starts the tool's timeout clock from then.
 
   The task's result is `{:ok, text}` or `{:error, text}`. A raise, exit or
-  kill of the task is turned into an error result by the loop. Before a
+  throw in the task (the gate's or the tool's) is formatted there
+  (`Rho.Untrusted.format/4`) and ends the task with that text as its exit
+  reason; the loop turns it, or any other abnormal end of the task (a kill,
+  a linked process's exit), into an error result without running anything
+  of the reason (`Rho.Untrusted.exit_text/2`). Before a
   tool runs, the registry's sources are told its task
   (`Rho.ToolRegistry.watch/2`), so a source of agent-written tools can
   count a crash or timeout (the loop kills it) against them.
+
+  A Dyn tool's answer (`Rho.Untrusted.untrusted?/1`) is made plain data in
+  the task (`Rho.Untrusted.plain/1`: structs become maps, funs text)
+  before it is encoded or leaves the task, so neither the loop nor its
+  subscribers ever hold a value whose protocols run Dyn code.
 
   A tool may answer with pictures for the model as well as text:
   `{:ok, {:images, [{mime_type, bytes}], text}}` (photos), or
@@ -28,6 +37,7 @@ defmodule Rho.ToolRunner do
 
   alias Rho.Tool
   alias Rho.ToolRegistry
+  alias Rho.Untrusted
 
   @type gate :: (call :: map(), ctx :: map() -> :allow | {:block, String.t()})
 
@@ -38,17 +48,24 @@ defmodule Rho.ToolRunner do
   @spec start(Supervisor.supervisor(), pid(), module(), map(), gate(), map()) :: Task.t()
   def start(task_sup, loop, module, call, gate, ctx) do
     Task.Supervisor.async_nolink(task_sup, fn ->
-      case gate.(call, ctx) do
-        :allow ->
-          :ok = ToolRegistry.watch(self(), module)
-          send(loop, {:tool_running, self()})
-          call["arguments"] |> module.run(ctx) |> to_result()
+      try do
+        case gate.(call, ctx) do
+          :allow ->
+            :ok = ToolRegistry.watch(self(), module)
+            send(loop, {:tool_running, self()})
+            call["arguments"] |> module.run(ctx) |> answer(module) |> to_result()
 
-        {:block, reason} ->
-          {:error, "Blocked before running: #{reason}"}
+          {:block, reason} ->
+            {:error, "Blocked before running: #{reason}"}
+        end
+      catch
+        kind, reason -> Untrusted.crash(kind, reason, __STACKTRACE__)
       end
     end)
   end
+
+  defp answer(value, module),
+    do: if(Untrusted.untrusted?(module), do: Untrusted.plain(value), else: value)
 
   @type images :: {:images, [{String.t(), binary()}], String.t()}
   @type result :: {:ok, String.t() | images()} | {:error, String.t()}
@@ -86,11 +103,14 @@ defmodule Rho.ToolRunner do
   def to_result(other),
     do: {:error, "tool returned an unexpected value: #{inspect(other, limit: 20)}"}
 
+  @doc """
+  The error text for a tool task that ended abnormally (its `:DOWN`
+  reason), in the loop's process: nothing of the reason runs
+  (`Rho.Untrusted.exit_text/2`); a crash the task formatted itself reads
+  as that text.
+  """
   @spec crash_text(term()) :: String.t()
-  def crash_text({%{__exception__: true} = e, stack}) when is_list(stack),
-    do: "Tool crashed: " <> Exception.format_banner(:error, e, stack)
-
-  def crash_text(reason), do: "Tool crashed: " <> Exception.format_exit(reason)
+  def crash_text(reason), do: "Tool crashed: " <> Untrusted.exit_text(reason)
 
   @spec timeout_text(module()) :: String.t()
   def timeout_text(module),

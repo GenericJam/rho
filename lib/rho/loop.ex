@@ -69,8 +69,9 @@ defmodule Rho.Loop do
   `Rho.Tool`'s three.
 
   A tool that answers with details (`{:ok, {:details, output, details}}`,
-  `Rho.ToolRunner`) has them sent raw to the subscribers with
-  `tool_execution_end`; what goes in the session is the host's choice,
+  `Rho.ToolRunner`) has them sent to the subscribers with
+  `tool_execution_end` as it gave them (a Dyn tool's as plain data,
+  `Rho.Untrusted.plain/1`); what goes in the session is the host's choice,
   `:keep_details` (`fn tool_name, details -> kept | nil end`, called in
   this process, so keep it quick): its non-nil answer is stored as the
   toolResult entry's `details` (pi's), for a screen drawing the session
@@ -565,11 +566,15 @@ defmodule Rho.Loop do
   # call them, and handle_reply drops any it calls anyway.
   defp offered(s), do: tools(s)
 
-  defp tools(%{opts: %{tools: :registry}} = s),
-    do: ToolRegistry.list() |> Map.new(&{&1.name(), &1}) |> Map.drop(s.opts.withhold_tools)
+  defp tools(%{opts: %{tools: :registry}} = s), do: named(ToolRegistry.list(), s)
+  defp tools(%{opts: %{tools: modules}} = s), do: named(modules, s)
 
-  defp tools(%{opts: %{tools: modules}} = s),
-    do: modules |> Map.new(&{&1.name(), &1}) |> Map.drop(s.opts.withhold_tools)
+  # By the name each offers itself under; a Dyn tool whose declaration
+  # failed (`Rho.Tool.offered_name/1`) is left out.
+  defp named(modules, s) do
+    for(m <- modules, name <- [Tool.offered_name(m)], name != nil, into: %{}, do: {name, m})
+    |> Map.drop(s.opts.withhold_tools)
+  end
 
   # A wrap-up reply's tool calls (none were offered) are dropped, not run.
   defp handle_reply(s, reply) do

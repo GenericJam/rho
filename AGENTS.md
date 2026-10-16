@@ -35,6 +35,15 @@ Follow `~/AGENTS.md` (commits, reviews, Muster).
   Core prefixes, check lists) and `Rho.Dyn.Screens`. Its tests compile into
   the VM-wide code server: `async: false`, `purge_all/0` around each.
   mob is an optional dependency, only for `Rho.Dyn.Screens.Mob` and tests.
+- **Terms from Dyn code are untrusted** (`Rho.Untrusted`). A Core process
+  (the loop, the Keeper, a compile's or selftest's caller) never calls
+  `Exception.message/format*`, `inspect/1`, interpolation, `to_string/1` or
+  `Jason.encode` on a term Dyn code made, nor a Dyn module's functions
+  (a Dyn tool's callbacks go through `Rho.Tool.info/1`): format in the
+  process that ran the Dyn code (`Untrusted.format/4`), describe the rest
+  (`Untrusted.describe/2`, `exit_text/2`), and hand over plain data
+  (`Untrusted.plain/1`). Tests run with unconsolidated protocols so a Dyn
+  `defimpl` dispatches (`test/rho/dyn/untrusted_test.exs`).
 - No Hex publish or version bump meant to publish without Kevin's say-so.
   There's no release workflow yet on purpose: adding one publishes on push.
 
