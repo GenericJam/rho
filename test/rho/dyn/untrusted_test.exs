@@ -11,6 +11,7 @@ defmodule Rho.Dyn.UntrustedTest do
 
   alias Rho.Dyn
   alias Rho.Dyn.Keeper
+  alias Rho.Dyn.LogGuard
   alias Rho.Loop
   alias Rho.Session
   alias Rho.Test.FakeLLM
@@ -579,13 +580,13 @@ defmodule Rho.Dyn.UntrustedTest do
     me = self()
     stream = Stream.map([1, 2], &send(me, {:ran, &1}))
     host = %{msg: {:report, %{reason: %ArgumentError{message: "host"}, s: stream}}, meta: %{}}
-    assert Rho.Dyn.LogGuard.filter(host, nil) == host
+    assert LogGuard.filter(host, nil) == host
     refute_received {:ran, _}
 
     dyn = %{msg: {:string, "x"}, meta: %{user_id: struct(mod, mode: :plain), pid: me}}
 
     assert %{msg: {:string, "(a log event held a Dyn term) " <> _}, meta: meta} =
-             Rho.Dyn.LogGuard.filter(dyn, nil)
+             LogGuard.filter(dyn, nil)
 
     assert meta == %{pid: me}
   end
