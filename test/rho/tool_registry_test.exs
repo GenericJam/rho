@@ -84,8 +84,10 @@ defmodule Rho.ToolRegistryTest do
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, _, :killed}
-    # the supervisor restarts it with the same options
+    # the supervisor restarts it with the same options; its name is
+    # registered before init/1 fills the tables, so wait for init too
     wait_until(fn -> Process.whereis(ToolRegistry) not in [nil, pid] end)
+    _ = :sys.get_state(ToolRegistry)
     assert ToolRegistry.core_tools() == [Crash]
     assert ToolRegistry.sources() == [Other]
 
