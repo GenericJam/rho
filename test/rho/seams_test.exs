@@ -4,10 +4,12 @@ defmodule Rho.SeamsTest do
 
   alias Rho.Config
   alias Rho.CredentialStore
+  alias Rho.Dyn
   alias Rho.Loop
   alias Rho.Session
   alias Rho.Settings
   alias Rho.Test.FakeLLM
+  alias Rho.Tools.DynPropose
 
   @moduletag :tmp_dir
 
@@ -167,12 +169,12 @@ defmodule Rho.SeamsTest do
     end
 
     test "Dyn's agent-facing text says how the host's human approves a generation" do
-      assert Rho.Dyn.agent_guide() =~ "approves it on the phone with the screen lock"
-      assert Rho.Tools.DynPropose.description() =~ "approve it on the phone with the screen lock"
+      assert Dyn.agent_guide() =~ "approves it on the phone with the screen lock"
+      assert DynPropose.description() =~ "approve it on the phone with the screen lock"
 
       put_env(:hints, approve: "in the Workshop, with the proposal's Approve button")
 
-      for text <- [Rho.Dyn.agent_guide(), Rho.Tools.DynPropose.description()] do
+      for text <- [Dyn.agent_guide(), DynPropose.description()] do
         assert text =~ "it in the Workshop, with the proposal's Approve button"
         refute text =~ "screen lock"
       end
