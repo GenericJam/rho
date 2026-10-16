@@ -172,23 +172,21 @@ must call it drops both:
 Dyn code never runs in a Core process through what it hands over
 (`Rho.Untrusted`). A crash is formatted, with its stacktrace, in the
 process that crashed (a tool's task, a selftest, a compile), in a helper
-with a time and heap bound that never ends in a crash report and dies
-with its caller; the loop, the Keeper and a proposal's caller only
-describe a reason they receive (total over any term; integers past 1024
-bits print as a placeholder), without calling an
-exception's `message/1` or any protocol (`Inspect`, `String.Chars`,
-`Jason.Encoder`) a Dyn struct implements. A Dyn tool's answer and details
-become plain data (structs as maps) in its task, and its name,
-description, schema, timeout and concurrency are read in one bounded
-throwaway process and kept; a tool whose declaration fails is left out
-(one that ran over is read again after 1, 5 and 30 minutes, then stays
-out). Crash events' `reason` stays a
-string. A host watches its own Dyn processes with `Rho.Dyn.watch/2` and
-`Rho.Dyn.unwatch/1`; one that exits `{:rho_crash, text}`
-(`Rho.Untrusted.crash/3`) is reported with `text`. Known limit: a Dyn
-process crashing with an exception whose `message/1` fails in certain
-ways can make OTP drop Elixir's logger translator VM-wide (that code runs
-in the Dyn process, not a Core one).
+with a time and heap bound that never ends in a crash report and dies with
+its caller; the loop, the Keeper and a proposal's caller only describe a
+reason they receive (total over any term; integers past 1024 bits print as
+a placeholder), without calling an exception's `message/1` or any protocol
+(`Inspect`, `String.Chars`, `Jason.Encoder`) a Dyn struct implements. A
+Dyn tool's answer and details become plain data (structs as maps) in its
+task, and its name, description, schema, timeout and concurrency are read
+in one bounded throwaway process and kept; a tool whose declaration fails
+is left out (one that ran over is read again after 1, 5 and 30 minutes,
+then stays out). Crash events' `reason` stays a string. A host watches its
+own Dyn processes with `Rho.Dyn.watch/2` and `Rho.Dyn.unwatch/1`; one that
+exits `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) is reported with
+`text`. Known limit: a Dyn process crashing with an exception whose
+`message/1` fails in certain ways can make OTP drop Elixir's logger
+translator VM-wide (that code runs in the Dyn process, not a Core one).
 
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that

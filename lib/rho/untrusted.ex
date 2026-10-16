@@ -193,8 +193,9 @@ defmodule Rho.Untrusted do
 
             send(caller, {ref, result})
         after
-          # The caller died before its watcher started.
-          timeout -> :ok
+          # The caller died before its watcher started, or the watcher came
+          # too late: the caller reads that as running over.
+          timeout -> send(caller, {ref, :timeout})
         end
       end)
 

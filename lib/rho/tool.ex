@@ -32,6 +32,7 @@ defmodule Rho.Tool do
   # When a read that ran over is tried again: after each of these, then never.
   @retries_ms [60_000, 300_000, 1_800_000]
   @max_timeout_ms 86_400_000
+  @int_bound Bitwise.bsl(1, 1024)
 
   @callback name() :: String.t()
   @callback description() :: String.t()
@@ -256,8 +257,11 @@ defmodule Rho.Tool do
   defp json?([head | tail]), do: json?(head) and (tail == [] or (is_list(tail) and json?(tail)))
   defp json?([]), do: true
   defp json?(text) when is_binary(text), do: String.valid?(text)
-  # Integers bounded: encoding a huge one for every request would cost seconds.
-  defp json?(value) when is_integer(value), do: value in -0xFFFFFFFFFFFF..0xFFFFFFFFFFFF
+  # Integers bounded (as `Rho.Untrusted` bounds them): encoding a huge one
+  # for every request would cost seconds.
+  defp json?(value) when is_integer(value),
+    do: value <= @int_bound and value >= -@int_bound
+
   defp json?(value), do: is_number(value) or is_atom(value)
 
   defp json_key?(key) when is_binary(key), do: String.valid?(key)
