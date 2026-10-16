@@ -48,6 +48,7 @@ defmodule Rho.Events do
 
   @type event :: %{required(:type) => atom(), optional(atom()) => term()}
 
+  @doc false
   @spec broadcast(Enumerable.t(), String.t(), event()) :: :ok
   def broadcast(subscribers, session_id, event) do
     Enum.each(subscribers, &send(&1, {:rho, session_id, event}))

@@ -25,6 +25,10 @@ defmodule Rho.Dyn.Store do
   Everything that decides what runs (`current`, manifests, `boot.json`) is
   written to a temp file and renamed over the old one, so a crash mid-write
   leaves the old file.
+
+  `Rho.Dyn`, `Rho.Dyn.Keeper`, `Rho.Dyn.Compiler` and `Rho.Dyn.Seed` read
+  and write it; hosts read Dyn state through `Rho.Dyn` instead. Every
+  function takes the root dir first.
   """
 
   alias Rho.Dyn.Generation
@@ -32,6 +36,7 @@ defmodule Rho.Dyn.Store do
   @log_keep 200
   @log_max_bytes 256 * 1024
 
+  @doc "The default root dir: `dyn` under `Rho.Config.data_dir/0`."
   @spec default_root() :: Path.t()
   def default_root, do: Path.join(Rho.Config.data_dir(), "dyn")
 
@@ -48,6 +53,7 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Points `current` at generation `n` (0: no Dyn layer)."
   @spec put_current(Path.t(), non_neg_integer()) :: :ok | {:error, term()}
   def put_current(root, n) when is_integer(n) and n >= 0,
     do: write_atomic(Path.join(root, "current"), Integer.to_string(n))
@@ -65,6 +71,7 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Records that the seed was installed as generation `n`."
   @spec put_seed(Path.t(), pos_integer()) :: :ok | {:error, term()}
   def put_seed(root, n) when is_integer(n) and n > 0,
     do: write_atomic(Path.join(root, "seed"), Integer.to_string(n))
@@ -94,6 +101,7 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Writes the seed's record (`seed.json`, see `seed_files/1`)."
   @spec put_seed_files(Path.t(), %{String.t() => String.t()} | nil, String.t() | nil) ::
           :ok | {:error, term()}
   def put_seed_files(root, files, rejected) do
@@ -127,6 +135,7 @@ defmodule Rho.Dyn.Store do
     stored ++ [Generation.empty()]
   end
 
+  @doc "Generation `n`'s manifest; generation 0 is `Rho.Dyn.Generation.empty/0`."
   @spec generation(Path.t(), non_neg_integer()) :: {:ok, Generation.t()} | {:error, :not_found}
   def generation(_root, 0), do: {:ok, Generation.empty()}
 
@@ -139,6 +148,7 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Writes generation `gen.n`'s manifest."
   @spec put_generation(Path.t(), Generation.t()) :: :ok | {:error, term()}
   def put_generation(root, %Generation{n: n} = gen) when n > 0,
     do: write_atomic(manifest_path(root, n), Jason.encode!(Generation.to_json(gen), pretty: true))
@@ -160,6 +170,7 @@ defmodule Rho.Dyn.Store do
   def sources(_root, 0), do: %{}
   def sources(root, n), do: read_tree(src_dir(root, n))
 
+  @doc "Writes generation `n`'s sources (`%{relative_path => source}`)."
   @spec put_sources(Path.t(), pos_integer(), %{String.t() => String.t()}) :: :ok
   def put_sources(root, n, sources), do: write_tree(src_dir(root, n), sources)
 
@@ -167,6 +178,7 @@ defmodule Rho.Dyn.Store do
   @spec src_dir(Path.t(), pos_integer()) :: Path.t()
   def src_dir(root, n), do: Path.join(gen_dir(root, n), "src")
 
+  @doc "Writes generation `n`'s compiled binaries."
   @spec put_beams(Path.t(), pos_integer(), [{module(), binary()}]) :: :ok
   def put_beams(root, n, beams) do
     dir = Path.join(gen_dir(root, n), "ebin")
@@ -200,13 +212,16 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Writes generation `n`'s compile dependencies (see `deps/2`)."
   @spec put_deps(Path.t(), pos_integer(), map()) :: :ok
   def put_deps(root, n, deps),
     do: File.write!(Path.join(gen_dir(root, n), "deps.json"), Jason.encode!(deps))
 
+  @doc "Writes generation `n`'s diff against its parent."
   @spec put_diff(Path.t(), pos_integer(), String.t()) :: :ok
   def put_diff(root, n, text), do: File.write!(Path.join(gen_dir(root, n), "diff.patch"), text)
 
+  @doc "Generation `n`'s unified diff against its parent; `\"\"` when there is none."
   @spec diff(Path.t(), non_neg_integer()) :: String.t()
   def diff(_root, 0), do: ""
 
@@ -219,6 +234,7 @@ defmodule Rho.Dyn.Store do
 
   # ── staging ──
 
+  @doc "The staged sources as `%{relative_path => source}`."
   @spec staged(Path.t()) :: %{String.t() => String.t()}
   def staged(root), do: read_tree(staging_dir(root))
 
@@ -226,6 +242,7 @@ defmodule Rho.Dyn.Store do
   @spec staging?(Path.t()) :: boolean()
   def staging?(root), do: File.dir?(staging_dir(root))
 
+  @doc "One staged source; `rel` must pass `valid_rel/1`."
   @spec stage_read(Path.t(), String.t()) :: {:ok, String.t()} | {:error, :bad_path | :not_found}
   def stage_read(root, rel) do
     with {:ok, rel} <- valid_rel(rel) do
@@ -244,6 +261,7 @@ defmodule Rho.Dyn.Store do
     write_tree(staging_dir(root), sources)
   end
 
+  @doc "Writes (creates or replaces) one staged source; `rel` must pass `valid_rel/1`."
   @spec stage_put(Path.t(), String.t(), String.t()) :: :ok | {:error, :bad_path}
   def stage_put(root, rel, source) when is_binary(source) do
     with {:ok, rel} <- valid_rel(rel) do
@@ -269,6 +287,7 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Removes one staged source; `:ok` when it was already absent."
   @spec stage_delete(Path.t(), String.t()) :: :ok | {:error, :bad_path}
   def stage_delete(root, rel) do
     with {:ok, rel} <- valid_rel(rel) do
@@ -302,6 +321,7 @@ defmodule Rho.Dyn.Store do
           core: String.t() | nil
         }
 
+  @doc "The launch markers (`t:boot_markers/0`); a fresh, stable record when there are none."
   @spec boot_markers(Path.t()) :: boot_markers()
   def boot_markers(root) do
     with {:ok, json} <- File.read(Path.join(root, "boot.json")),
@@ -314,6 +334,7 @@ defmodule Rho.Dyn.Store do
     end
   end
 
+  @doc "Writes the launch markers (`t:boot_markers/0`)."
   @spec put_boot_markers(Path.t(), %{
           required(:boot_attempts) => non_neg_integer(),
           required(:stable) => boolean(),

@@ -28,15 +28,22 @@ defmodule Rho.ToolRegistry do
   @meta Module.concat(__MODULE__, Meta)
   @builtin [Rho.Tools.ReadArtifact, Rho.Tools.Todo]
 
+  @doc "Started by `Rho.Supervisor`. Options: `:tools`, `:tool_sources` (see the moduledoc)."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @doc """
+  Adds `module` under its `c:Rho.Tool.name/0`, replacing a tool of that name.
+  `{:error, :not_a_tool}` if it doesn't implement `Rho.Tool`.
+  """
   @spec register(module()) :: :ok | {:error, :not_a_tool}
   def register(module), do: GenServer.call(__MODULE__, {:register, module})
 
+  @doc "Removes the tool named `name` from the table (a source's tools aren't affected)."
   @spec unregister(String.t()) :: :ok
   def unregister(name), do: GenServer.call(__MODULE__, {:unregister, name})
 
+  @doc "The tool module offered as `name`: the table's, else the first source's that has it."
   @spec lookup(String.t()) :: {:ok, module()} | :error
   def lookup(name) do
     case :ets.lookup(@table, name) do
@@ -141,7 +148,7 @@ defmodule Rho.ToolRegistry.Source do
   `{Rho.Supervisor, tool_sources: [MySource]}` or
   `config :rho, :tool_sources, [MySource]`.
 
-  `tools/0` and `lookup/1` run in the caller's process (the loop, at the
+  `c:tools/0` and `c:lookup/1` run in the caller's process (the loop, at the
   start of every model call) and must be cheap: read an ETS table or a
   persistent term, don't call a process that may be busy.
   """

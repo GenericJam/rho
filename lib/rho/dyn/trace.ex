@@ -18,7 +18,7 @@ defmodule Rho.Dyn.Trace do
   the file's needs as unknown.
 
   It is also the gate on what a Dyn compile may define, before anything
-  loads (`guard/2`, in the compiling process): when a module's definition
+  loads (`guard/3`, in the compiling process): when a module's definition
   starts (`:defmodule`) it is reported to the compiler, which undoes what
   the compile defined outside the generation, and refused (the compile of
   that file fails) unless it is `<ns>.G<n>.*` (the namespace,

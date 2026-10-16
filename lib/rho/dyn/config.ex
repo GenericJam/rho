@@ -46,9 +46,11 @@ defmodule Rho.Dyn.Config do
       `:probation_ms`, `:crash_limit`, `:on_stable`, ...
   """
 
+  @doc "The whole `config :rho, :dyn` keyword list (`[]` when unset)."
   @spec get() :: keyword()
   def get, do: Application.get_env(:rho, :dyn, [])
 
+  @doc "Is `:enabled` set to `true`?"
   @spec enabled?() :: boolean()
   def enabled?, do: Keyword.get(get(), :enabled, false) == true
 
@@ -68,9 +70,11 @@ defmodule Rho.Dyn.Config do
   @spec generation_prefix(non_neg_integer()) :: String.t()
   def generation_prefix(n), do: "Elixir.#{namespace_name()}.G#{n}."
 
+  @doc "The `:screens` module (`Rho.Dyn.Screens.None` by default)."
   @spec screens() :: module()
   def screens, do: Keyword.get(get(), :screens, Rho.Dyn.Screens.None)
 
+  @doc "The host's OTP application (`:app`), or nil."
   @spec app() :: atom() | nil
   def app, do: Keyword.get(get(), :app)
 
@@ -82,6 +86,7 @@ defmodule Rho.Dyn.Config do
   @spec allowed() :: [String.t()]
   def allowed, do: Enum.uniq(["Rho.Tool" | Enum.map(Keyword.get(get(), :allowed, []), &name/1)])
 
+  @doc "The `:check` overrides as given (`Rho.Dyn.Check` merges them over its defaults)."
   @spec check() :: keyword()
   def check, do: Keyword.get(get(), :check, [])
 
@@ -107,6 +112,7 @@ defmodule Rho.Dyn.Config do
     end
   end
 
+  @doc "The `:guide` text, resolved; nil when unset."
   @spec guide() :: String.t() | nil
   def guide do
     case Keyword.get(get(), :guide) do

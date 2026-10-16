@@ -20,7 +20,7 @@ defmodule Rho.Dyn.Generation do
   `modules` has one entry per compiled module: the `module` the agent wrote
   (`"Dyn.Notes"`), the `versioned` one it was compiled into
   (`"Dyn.G3.Notes"`), its `kind` (`:tool`, `:screen` or `:module`),
-  the logical `name` the registry files it under (a tool's `name/0`, the
+  the logical `name` the registry files it under (a tool's `c:Rho.Tool.name/0`, the
   module name below `Dyn.` otherwise) and the `sha256` of its BEAM.
   `selftests` has one `%{module, kind, ok, detail, ms}` per module.
   """
@@ -108,9 +108,11 @@ defmodule Rho.Dyn.Generation do
   def ever_active?(%__MODULE__{n: 0}), do: true
   def ever_active?(%__MODULE__{status: status}), do: status in [:probation, :proven, :reverted]
 
+  @doc false
   @spec now() :: String.t()
   def now, do: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
+  @doc "The manifest's JSON form (string statuses and kinds)."
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = g) do
     g
@@ -120,6 +122,7 @@ defmodule Rho.Dyn.Generation do
     |> Map.update!(:selftests, fn tests -> Enum.map(tests, &stringify_kind/1) end)
   end
 
+  @doc "Reads a manifest's JSON back; unknown statuses and kinds fall back to defaults."
   @spec from_json(map()) :: t()
   def from_json(%{} = json) do
     %__MODULE__{

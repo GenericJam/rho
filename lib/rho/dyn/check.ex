@@ -407,6 +407,7 @@ defmodule Rho.Dyn.Check do
 
   defp impl_of_own?(_mod, _impl, _own, _mods), do: false
 
+  @doc "Violations as text, one `file:line: message` per line (what a rejection's `reason` says)."
   @spec format([violation()]) :: String.t()
   def format(violations) do
     Enum.map_join(violations, "\n", fn

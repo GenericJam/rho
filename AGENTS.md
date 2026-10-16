@@ -45,7 +45,13 @@ Follow `~/AGENTS.md` (commits, reviews, Muster).
   (`Untrusted.plain/1`). Tests run with unconsolidated protocols so a Dyn
   `defimpl` dispatches (`test/rho/dyn/untrusted_test.exs`).
 - No Hex publish or version bump meant to publish without Kevin's say-so.
-  There's no release workflow yet on purpose: adding one publishes on push.
+  `.github/workflows/release.yml` publishes on any push to master that
+  changes `mix.exs`: it runs the gates, tags `v<@version>`, creates the
+  GitHub Release from the CHANGELOG section and runs `mix hex.publish`
+  (each step skips what already exists). So a `mix.exs` change that isn't a
+  release (a dep, the docs config) re-runs it harmlessly once `@version` is
+  on Hex; a new `@version` publishes. Move `[Unreleased]` to
+  `[x.y.z] - date` in the same commit as the bump.
 
 ## Before a commit
 

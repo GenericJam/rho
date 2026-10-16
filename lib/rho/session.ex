@@ -734,6 +734,10 @@ defmodule Rho.Session do
     end)
   end
 
+  @doc """
+  Adds one assistant message's pi `usage` map to a `totals/1` accumulator:
+  for a host that keeps a running total as messages arrive.
+  """
   @spec add_usage(map(), map()) :: map()
   def add_usage(acc, u) do
     %{

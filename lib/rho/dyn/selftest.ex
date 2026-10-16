@@ -1,13 +1,13 @@
 defmodule Rho.Dyn.Selftest do
   @moduledoc """
-  Selftests a compiled generation (the pipeline's step 4, see `Rho.Dyn`),
+  Selftests a compiled generation (the end of the pipeline's step 2, see `Rho.Dyn`),
   one module at a time, each in a fresh process with a `max_heap_size`
   (killed when exceeded, off-heap binaries included), a timeout and
   `trap_exit` (a linked helper that crashes doesn't take the test down
   unreported).
 
     * a **tool** (`Rho.Tool`) must name itself (`[a-z][a-z0-9_]*`),
-      describe itself, declare a parameter schema and pass its `selftest/0`,
+      describe itself, declare a parameter schema and pass its `c:Rho.Tool.selftest/0`,
       which a Dyn tool must define;
     * a **screen** (the host's `c:Rho.Dyn.Screens.screen?/1`) must pass the
       host's screen test (`c:Rho.Dyn.Screens.selftest/1`; mob's mounts it

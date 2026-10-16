@@ -37,7 +37,7 @@ defmodule Rho.LLM.ReqLLM do
   windows its response headers report, and a 429's reset.
 
   A 429 (or a 529 overloaded) comes back as `{:rate_limited, limit}`
-  (`t:Rho.LLM.limit/0`, `limit/6`): its `retry-after`, and when
+  (`t:Rho.LLM.limit/0`): its `retry-after`, and when
   a usage window is used up, which one and until when: from the response's
   headers, a Codex usage-limit body, else the windows
   `Rho.Usage` recorded from earlier calls (an Anthropic 5-hour

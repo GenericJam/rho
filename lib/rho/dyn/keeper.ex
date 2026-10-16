@@ -1,9 +1,9 @@
 defmodule Rho.Dyn.Keeper do
   @moduledoc """
-  The Core process that decides which Dyn generation runs (the pipeline's
-  steps 6–7, and safe mode, see `Rho.Dyn`), like sloppy_joe's CanvasKeeper. It owns
-  the registry table (`Rho.Dyn.Registry`) and is the only writer
-  of the `current` pointer.
+  The Core process that decides which Dyn generation runs (activation,
+  probation, revert and safe mode, steps 3–4 in `Rho.Dyn`). It owns the
+  registry table (`Rho.Dyn.Registry`) and is the only writer of the
+  `current` pointer.
 
   **Activation** (`activate/3`, approval required) loads the generation,
   flips the pointer, then swaps the registry: a crash between the two
@@ -49,7 +49,7 @@ defmodule Rho.Dyn.Keeper do
 
   **Rebuilds** for a new Core (its binaries were built by another runtime,
   `Rho.Dyn.Compiler.stale?/1`) don't hold up the launch: the
-  terminal never waits for Dyn code. `boot/2` returns at once with the
+  app never waits for Dyn code. `boot/2` returns at once with the
   generation current but nothing of it in the registry (no Dyn tools,
   screens or theme; `Rho.Dyn.Registry.rebuilding/1` says so), a
   linked worker rebuilds and selftests it, and the Keeper then stores and
@@ -131,6 +131,11 @@ defmodule Rho.Dyn.Keeper do
 
   # ── API ──
 
+  @doc """
+  Started by `Rho.Supervisor` when Dyn is on (its `:dyn` option holds
+  `opts`). Options are merged over `config :rho, :dyn` and the defaults
+  (see the moduledoc); `:name` defaults to `Rho.Dyn.Keeper`.
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     opts =
@@ -187,10 +192,12 @@ defmodule Rho.Dyn.Keeper do
   @spec discard(GenServer.server(), pos_integer()) :: :ok | {:error, :not_pending}
   def discard(server, n), do: GenServer.call(server, {:discard, n})
 
+  @doc "`Rho.Dyn.activate/3` on this Keeper: candidate `n` goes on probation, with an approval token."
   @spec activate(GenServer.server(), pos_integer(), Approval.token()) ::
           {:ok, Generation.t()} | {:error, term()}
   def activate(server, n, token), do: GenServer.call(server, {:activate, n, token}, :infinity)
 
+  @doc "`Rho.Dyn.revert_to/3` on this Keeper: generation `n` becomes current, with an approval token."
   @spec revert_to(GenServer.server(), non_neg_integer(), Approval.token()) ::
           {:ok, Generation.t()} | {:error, term()}
   def revert_to(server, n, token), do: GenServer.call(server, {:revert_to, n, token}, :infinity)
@@ -232,6 +239,7 @@ defmodule Rho.Dyn.Keeper do
   @spec subscribe(GenServer.server(), pid()) :: :ok
   def subscribe(server, pid \\ self()), do: GenServer.call(server, {:subscribe, pid})
 
+  @doc "The current generation, its status and parent, the mode and the pending candidate."
   @spec status(GenServer.server()) :: %{
           generation: non_neg_integer(),
           status: Generation.status(),

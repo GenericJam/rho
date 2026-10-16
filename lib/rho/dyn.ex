@@ -40,14 +40,15 @@ defmodule Rho.Dyn do
   the loop sees Dyn tools through `Rho.ToolRegistry` (`Rho.Dyn.Source`),
   from the next model call after a switch.
 
-  **No Dyn code in a Core process** through what Dyn hands over
-  (`Rho.Untrusted`): crashes are formatted where they happened (the tool's
-  task, the selftest's or the compile's process, bounded), and the loop,
-  the Keeper and a proposal's caller only describe a reason they get,
-  without an exception's `message/1` or a Dyn struct's protocols. A Dyn
-  tool's answer is plain data before it leaves its task, and its
-  declaration is read in a bounded process outside the loop and kept (see
-  `Rho.Tool`).
+  **Keeping Dyn code out of Core processes** (best effort) where Dyn
+  hands something over (`Rho.Untrusted`): crashes are formatted where
+  they happened (the tool's task, the selftest's or the compile's
+  process, bounded), and the loop, the Keeper and a proposal's caller
+  only describe a reason they get, without an exception's `message/1` or
+  a Dyn struct's protocols. A Dyn tool's answer is plain data before it
+  leaves its task, and its declaration is read in a bounded process
+  outside the loop and kept (see `Rho.Tool`). Log events that hold a Dyn
+  term are described before the logger formats them (`Rho.Dyn.LogGuard`).
   A Dyn screen's own process runs its code, so whatever the host's screen
   layer does with its crash is the host's (mob's) business.
 
@@ -126,6 +127,7 @@ defmodule Rho.Dyn do
 
   # ── staging ──
 
+  @doc "The staged sources, `%{path => source}` (empty when the Keeper isn't running)."
   @spec staged(atom()) :: %{String.t() => String.t()}
   def staged(keeper \\ @keeper), do: with_dir(keeper, %{}, &Store.staged/1)
 
@@ -150,11 +152,13 @@ defmodule Rho.Dyn do
          do: Store.stage_create(dir, path, source)
   end
 
+  @doc "Removes `path` from staging (`:ok` if it wasn't there)."
   @spec stage_delete(String.t(), atom()) :: :ok | {:error, :bad_path | :not_running}
   def stage_delete(path, keeper \\ @keeper) do
     with {:ok, %{dir: dir}} <- Registry.config(keeper), do: Store.stage_delete(dir, path)
   end
 
+  @doc "Reads `path` from staging."
   @spec stage_read(String.t(), atom()) ::
           {:ok, String.t()} | {:error, :bad_path | :not_found | :not_running}
   def stage_read(path, keeper \\ @keeper) do
@@ -528,6 +532,7 @@ defmodule Rho.Dyn do
   @spec generations(atom()) :: [Generation.t()]
   def generations(keeper \\ @keeper), do: with_dir(keeper, [], &Store.generations/1)
 
+  @doc "Generation `n`'s record (`Rho.Dyn.Generation`); 0 is the empty generation."
   @spec generation(non_neg_integer(), atom()) :: {:ok, Generation.t()} | {:error, term()}
   def generation(n, keeper \\ @keeper),
     do: with_dir(keeper, {:error, :not_running}, &Store.generation(&1, n))
@@ -559,6 +564,11 @@ defmodule Rho.Dyn do
 
   # ── the registry ──
 
+  @doc """
+  The current generation's module for a logical name (`{:tool, "weather"}`,
+  `{:screen, "Notes"}`, `{:module, "Helpers"}`, see `Rho.Dyn.Registry`);
+  `:error` when it has none.
+  """
   @spec lookup(Registry.key(), atom()) :: {:ok, module()} | :error
   def lookup(key, keeper \\ @keeper), do: Registry.lookup(key, keeper)
 
@@ -592,6 +602,10 @@ defmodule Rho.Dyn do
   @spec unwatch(pid()) :: :ok
   def unwatch(pid), do: Keeper.unwatch(@keeper, pid)
 
+  @doc """
+  Is `module` Dyn code: a generation's versioned module (`Dyn.G<n>.*`) or a
+  protocol implementation for one (`Rho.Dyn.Compiler.generation_of/1`)?
+  """
   @spec dyn_module?(module()) :: boolean()
   def dyn_module?(module), do: Compiler.generation_of(module) != nil
 

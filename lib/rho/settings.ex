@@ -16,9 +16,11 @@ defmodule Rho.Settings do
   @callback fallback_model(data_dir :: Path.t()) :: String.t() | nil
   @callback daily_cap(data_dir :: Path.t()) :: float()
 
+  @doc "The configured module's `c:fallback_model/1`."
   @spec fallback_model(Path.t()) :: String.t() | nil
   def fallback_model(dir), do: Rho.Config.settings().fallback_model(dir)
 
+  @doc "The configured module's `c:daily_cap/1`."
   @spec daily_cap(Path.t()) :: float()
   def daily_cap(dir), do: Rho.Config.settings().daily_cap(dir)
 end
@@ -45,6 +47,7 @@ defmodule Rho.Settings.File do
     end
   end
 
+  @doc "Sets the daily cap in dollars (a number ≥ 0)."
   @spec put_daily_cap(number(), Path.t()) :: :ok
   def put_daily_cap(cap, dir \\ Rho.Config.data_dir()) when is_number(cap) and cap >= 0,
     do: write(dir, Map.put(read(dir), "daily_cap", cap * 1.0))

@@ -26,12 +26,15 @@ defmodule Rho.CredentialStore do
   @doc "Removes `key`; removing an absent one is `:ok`."
   @callback delete(key :: String.t()) :: :ok | {:error, term()}
 
+  @doc "The configured backend's `c:get/1` (`backend/0`); a host may keep its own secrets here too."
   @spec get(String.t()) :: {:ok, binary()} | :error | {:error, term()}
   def get(key), do: backend().get(key)
 
+  @doc "The configured backend's `c:put/2`."
   @spec put(String.t(), binary()) :: :ok | {:error, term()}
   def put(key, value), do: backend().put(key, value)
 
+  @doc "The configured backend's `c:delete/1`."
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(key), do: backend().delete(key)
 

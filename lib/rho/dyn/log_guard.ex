@@ -1,19 +1,23 @@
 defmodule Rho.Dyn.LogGuard do
   @moduledoc """
-  A primary `:logger` filter that keeps Dyn code out of the processes that
-  log for others.
+  A primary `:logger` filter that keeps Dyn terms away from the logger's
+  formatting, in whatever process logs them.
 
   A plain process that dies with an error is reported by the emulator, and
   that report is formatted in OTP's `:logger_proxy`: Elixir's translator
-  calls the exception's `message/1` there and inspects the reason. A Dyn
-  process (`spawn(fn -> raise MyError end)`) would so get its own code run
-  in a process every crash report of the VM goes through. This filter runs
-  before the translator and, for any log event that holds a struct of a
-  Dyn module (`Rho.Untrusted.untrusted?/1`), replaces the message with its
+  (itself a primary filter) calls the exception's `message/1` there and
+  inspects the reason. A Dyn process (`spawn(fn -> raise MyError end)`)
+  would so get its own code run in a process every crash report of the VM
+  goes through, and a `message/1` that throws or exits there makes OTP
+  remove the translator VM-wide (later crash logs come out untranslated).
+  This filter runs before the translator (`:logger` runs the newest
+  primary filter first, and the Keeper installs it when it starts, after
+  Logger) and, for any log event that holds a struct of a Dyn module
+  (`Rho.Untrusted.untrusted?/1`), replaces the message with its
   `Rho.Untrusted.describe/2` text and keeps only the metadata that holds
   no Dyn term. It reads terms as data (no protocol of any struct runs) and
   looks at most 10,000 terms of an event; a bigger event is let through
-  unchecked. The Keeper installs it when it starts.
+  unchecked.
 
   Best effort, like `Rho.Dyn.Check`: it lowers the chance that a Dyn
   process's crash takes a logger process down; it does not stop code that

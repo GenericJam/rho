@@ -1,18 +1,18 @@
 defmodule Rho.Dyn.Approval do
   @moduledoc """
-  The approval gate on changing what runs (the pipeline's step 5, see
+  The approval gate on changing what runs (the pipeline's step 3, see
   `Rho.Dyn`):
   activating a proposed generation, or reverting to a chosen one by hand.
 
   The UI asks the configured implementation for a token once the human
-  approved (`request/1`, reached through `Rho.Dyn.request_approval/2`);
-  `Rho.Dyn.Keeper` asks the same implementation to `verify/2` it
+  approved (`c:request/1`, reached through `Rho.Dyn.request_approval/2`);
+  `Rho.Dyn.Keeper` asks the same implementation to `c:verify/2` it
   before it changes anything. Contract for implementations:
 
     * a token is for one subject: approving generation 5 doesn't activate
       generation 6, and an activation token doesn't revert;
     * a token expires (the production one after 60 s);
-    * a token works once: `verify/2` consumes it. The Keeper also remembers
+    * a token works once: `c:verify/2` consumes it. The Keeper also remembers
       every token it accepted and refuses it a second time
       (`{:error, :approval_used}`), whatever the implementation says.
 
@@ -53,10 +53,10 @@ defmodule Rho.Dyn.Approval.Biometric do
 
   * `confirm/1` records that the human just approved `subject`: valid for
     60 s, once.
-  * `request/1` turns a fresh confirmation of exactly that subject into a
+  * `c:Rho.Dyn.Approval.request/1` turns a fresh confirmation of exactly that subject into a
     token (consuming the confirmation); otherwise `{:error,
     :approval_required}`.
-  * `verify/2` accepts a token minted for that subject, within 60 s,
+  * `c:Rho.Dyn.Approval.verify/2` accepts a token minted for that subject, within 60 s,
     once.
 
   Without the process running, nothing is approved. Option: `:ttl_ms`
@@ -70,6 +70,7 @@ defmodule Rho.Dyn.Approval.Biometric do
 
   @ttl_ms 60_000
 
+  @doc "Started by `Rho.Supervisor` when Dyn is on. Option: `:ttl_ms`."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 

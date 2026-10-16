@@ -31,6 +31,12 @@ defmodule Rho.LLMCatalog do
   @spec providers() :: [String.t()]
   def providers, do: @providers
 
+  @doc """
+  Writes the trimmed snapshot to the data dir and points llm_db at it.
+  Call before the first model lookup; `Rho.Supervisor` does (its
+  `:llm_catalog` option), so only a host that looks models up before
+  starting it needs to.
+  """
   @spec install!() :: :ok
   def install! do
     path = Path.join(Rho.Config.data_dir(), "llm_db_snapshot.json")

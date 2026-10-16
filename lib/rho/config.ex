@@ -1,9 +1,10 @@
 defmodule Rho.Config do
   @moduledoc """
   The host's settings for rho, `config :rho, ...`, each with a default that
-  works on a computer. A value given as `{module, function, args}` (or a
-  0-arity function) is called each time it is read, so a host can keep it
-  in its own settings and change it at run time.
+  works on a computer. `:data_dir`, `:default_model` and `:system_prompt`
+  may be given as `{module, function, args}` (or a 0-arity function),
+  called each time the value is read, so a host can keep them in its own
+  settings and change them at run time.
 
     * `:data_dir`: where rho keeps sessions, artifacts, todo lists, the
       cost ledger, `usage.json`, `settings.json`, the trimmed model catalog
@@ -67,16 +68,20 @@ defmodule Rho.Config do
     end
   end
 
+  @doc "The `:credential_store` module in effect."
   @spec credential_store() :: module()
   def credential_store, do: Application.get_env(:rho, :credential_store, Rho.CredentialStore.File)
 
+  @doc "The `:settings` module in effect."
   @spec settings() :: module()
   def settings, do: Application.get_env(:rho, :settings, Rho.Settings.File)
 
+  @doc "The `:default_model` spec, resolved: what `Rho.start_loop/1` uses without a `:model`."
   @spec default_model() :: String.t()
   def default_model,
     do: :rho |> Application.get_env(:default_model, @default_model) |> resolve([])
 
+  @doc "The `:system_prompt`, resolved (`Rho.default_system_prompt/0` when unset)."
   @spec system_prompt() :: String.t()
   def system_prompt do
     case Application.get_env(:rho, :system_prompt) do
@@ -85,6 +90,7 @@ defmodule Rho.Config do
     end
   end
 
+  @doc "The `:namespace` prefix of the loop's notice `customType`s."
   @spec namespace() :: String.t()
   def namespace, do: Application.get_env(:rho, :namespace, "rho")
 
@@ -96,6 +102,7 @@ defmodule Rho.Config do
     |> resolve([url])
   end
 
+  @doc "The `:app_name` the sign-in pages show."
   @spec app_name() :: String.t()
   def app_name, do: Application.get_env(:rho, :app_name, "the app")
 

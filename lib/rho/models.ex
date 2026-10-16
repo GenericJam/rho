@@ -30,7 +30,7 @@ defmodule Rho.Models do
         }
 
   @doc """
-  `[{provider, signed_in?, models}]` for every provider, in `Auth.providers/0`
+  `[{provider, signed_in?, models}]` for every provider, in `Rho.Auth.providers/0`
   order; a provider without a credential has no models.
   """
   @spec by_provider(map()) :: [{Auth.provider(), boolean(), [model()]}]

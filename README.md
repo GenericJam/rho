@@ -48,8 +48,6 @@ def deps do
 end
 ```
 
-Until 0.1.0 is on Hex, use the GitHub repo: `{:rho, github: "GenericJam/rho"}`.
-
 ## A minimal host
 
 rho has no OTP application callback (mob apps start their code by hand),
@@ -64,9 +62,13 @@ defmodule MyApp.Tools.Weather do
   @impl true
   def description, do: "Today's weather for a city."
   @impl true
-  def parameter_schema,
-    do: %{"type" => "object", "properties" => %{"city" => %{"type" => "string"}},
-          "required" => ["city"]}
+  def parameter_schema do
+    %{
+      "type" => "object",
+      "properties" => %{"city" => %{"type" => "string"}},
+      "required" => ["city"]
+    }
+  end
 
   @impl true
   def run(%{"city" => city}, _ctx), do: {:ok, "Sunny in #{city}."}
@@ -83,6 +85,7 @@ Supervisor.start_link(children, strategy: :one_for_one)
 :ok = Rho.Loop.subscribe(loop)
 :ok = Rho.Loop.prompt(loop, "Weather in Lisbon?")
 
+# The subscriber receives the run's events (`Rho.Events` lists them all):
 # {:rho, session_id, %{type: :message_update, kind: :text, delta: "..."}} ...
 # {:rho, session_id, %{type: :agent_end, reason: :done}}
 ```
@@ -111,9 +114,11 @@ them all):
 | Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM` | |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
 
-On a phone, `Rho.Supervisor` also writes llm_db a catalog trimmed to the
-four providers (`Rho.LLMCatalog`), since the packaged one isn't shipped
-to the device.
+`Rho.Supervisor` also points llm_db at a model catalog trimmed to
+Anthropic, OpenAI and Google (`Rho.LLMCatalog`), on every platform: a
+phone doesn't ship llm_db's packaged one, and the trimmed one loads fast.
+A host that uses llm_db (or req_llm) for other providers starts it with
+`llm_catalog: false`.
 
 ## Dyn: code the agent writes on the device
 
@@ -164,7 +169,9 @@ Its seams (`Rho.Dyn.Config` documents each):
 The default check keeps Dyn code to Mob's Elixir modules: Mob's native
 layer `:mob_nif` is banned (`banned_erlang`, and as a value in `forging`,
 so it can't be held in a variable and called), and the host's `:gated` and
-`:allowed` lists say which of Mob's modules Dyn code may use.
+`:allowed` lists say which of Mob's modules Dyn code may use. A host whose
+Dyn code must call `:mob_nif` drops both:
+`check: [banned_erlang: %{mob_nif: nil}, forging: %{mob_nif: nil}]`.
 
 **Threat model.** The check is a best-effort deny-list against the model's
 mistakes (a built tool that crashes, hangs, or calls something it shouldn't
@@ -174,33 +181,40 @@ around it: atoms or funs handed in as data, raw messages to OTP processes
 (Logger.App, `Logger.Backends.*`, `LoggerBackends`), starting a child
 under a trusted supervisor or `:alarm_handler`, and CPU, memory or message
 floods; `Rho.Dyn.Check` keeps the list. A host with stronger needs must
-isolate Dyn code itself (another node or OS process). A host whose Dyn code
-must call it drops both:
-`check: [banned_erlang: %{mob_nif: nil}, forging: %{mob_nif: nil}]`.
+isolate Dyn code itself (another node or OS process).
 
-Dyn code never runs in a Core process through what it hands over
-(`Rho.Untrusted`). A crash is formatted, with its stacktrace, in the
-process that crashed (a tool's task, a selftest, a compile), in a helper
-with a time and heap bound that never ends in a crash report and dies with
-its caller; the loop, the Keeper and a proposal's caller only describe a
-reason they receive (total over any term; integers past 1024 bits print as
-a placeholder), without calling an exception's `message/1` or any protocol
-(`Inspect`, `String.Chars`, `Jason.Encoder`) a Dyn struct implements. A
-Dyn tool's answer and details become plain data (structs as maps) in its
-task, and its name, description, schema, timeout and concurrency are read
-in one bounded throwaway process and kept; a tool whose declaration fails
-is left out (one that ran over is read again after 1, 5 and 30 minutes,
-then stays out). Crash events' `reason` stays a string. A host watches its
-own Dyn processes with `Rho.Dyn.watch/2` and `Rho.Dyn.unwatch/1`; one that
-exits `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) is reported with
-`text`. Known limit: a Dyn process crashing with an exception whose
-`message/1` fails in certain ways can make OTP drop Elixir's logger
-translator VM-wide (that code runs in the Dyn process, not a Core one).
-A log event that holds a Dyn struct is described before Elixir's
-translator sees it (`Rho.Dyn.LogGuard`, installed by the Keeper; it looks
-at most 10,000 terms, and a bigger event passes through), so a Dyn process's crash report runs none of its code in `:logger_proxy`.
-`Rho.Untrusted` and `LogGuard` lower the chance that a built tool's crash
-takes a trusted process down; like the check, they are best effort.
+Within that model, rho keeps a built tool's failures out of the processes
+that run the app (the loop, the Keeper, the logger). Like the check,
+these are best effort:
+
+- **Crashes are formatted where they happen** (`Rho.Untrusted`): in the
+  tool's task, the selftest or the compile, by a helper with a time and
+  heap bound that dies with its caller. The loop, the Keeper and a
+  proposal's caller only describe the reasons they receive, without
+  calling an exception's `message/1` or a protocol (`Inspect`,
+  `String.Chars`, `Jason.Encoder`) a Dyn struct implements; integers past
+  1024 bits print as a placeholder. Crash events' `reason` is a string.
+- **Answers become plain data**: a Dyn tool's result and details are
+  turned into plain terms (structs as maps) in its own task.
+- **Declarations are read once**: a tool's name, description, schema,
+  timeout and concurrency are read in one bounded throwaway process and
+  kept. A tool whose declaration fails is left out; one that ran over is
+  read again after 1, 5 and 30 minutes, then stays out.
+- **Logs are described** (`Rho.Dyn.LogGuard`, installed by the Keeper): a
+  log event that holds a Dyn struct is turned into text before Elixir's
+  translator sees it, so a Dyn process's crash report runs none of its code
+  in `:logger_proxy`. It looks at most 10,000 terms; a bigger event passes
+  through unchanged.
+- **Host processes**: a host watches its own Dyn processes (a built
+  screen, say) with `Rho.Dyn.watch/2` and `Rho.Dyn.unwatch/1`; one that
+  exits `{:rho_crash, text}` (`Rho.Untrusted.crash/3`) is reported with
+  `text`.
+
+Known limit: without `LogGuard`, a Dyn exception whose `message/1` fails
+can make OTP drop Elixir's logger translator VM-wide. `LogGuard` keeps
+that call out of the translator, except for an event too big to check
+(more than 10,000 terms ahead of the Dyn term) or after Logger is
+restarted, which removes the filter.
 
 On a phone, Dyn needs the Elixir compiler at run time: the app's build must
 ship `:elixir`'s compiler modules and `:compiler`, so a slim build that

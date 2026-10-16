@@ -41,6 +41,7 @@ defmodule Rho.Auth.Login do
   @code_lifetime_ms 9 * 60_000
   @flow_timeout_ms 15 * 60_000
 
+  @doc "Started by `Rho.Supervisor` (its `:login` option holds `opts`, see the moduledoc)."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 

@@ -6,7 +6,9 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
-The first release, 0.1.0: the agent core taken out of
+## [0.1.0] - 2026-10-16
+
+The first release: the agent core taken out of
 [Operator](https://github.com/GenericJam/operator) so Operator and Bezalel
 can share it.
 
@@ -36,8 +38,8 @@ can share it.
   (`Rho.ToolRegistry.Source`).
 - **Models** (`Rho.LLM`, `Rho.LLM.ReqLLM`, `Rho.Models`, `Rho.LLMCatalog`,
   `Rho.Usage`): Anthropic, OpenAI, OpenAI Codex and Google on req_llm, with
-  subscription usage windows and per-model counters, and a trimmed model
-  catalog for phones.
+  subscription usage windows and per-model counters, and a model catalog
+  trimmed to those providers (`llm_catalog: false` keeps llm_db's own).
 - **Sign-in** (`Rho.Auth`, `Rho.Auth.Login`, `Rho.CredentialStore`):
   Claude Pro/Max and ChatGPT (Codex) subscriptions through omp's OAuth PKCE
   flows, with refresh coordination and refresh-token rotation, or an API key
@@ -80,3 +82,6 @@ can share it.
   check (raw messages to `:logger_proxy`, Logger.App and logger backend
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
+
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/GenericJam/rho/releases/tag/v0.1.0

@@ -54,9 +54,11 @@ defmodule Rho.Auth do
   @refresh_call_ms 75_000
   @save_retry_ms 5_000
 
+  @doc "Started by `Rho.Supervisor` (its `:auth` option holds `opts`, see the moduledoc)."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @doc "Every provider rho can sign in to, in display order."
   @spec providers() :: [provider()]
   def providers, do: @providers
 
@@ -70,6 +72,7 @@ defmodule Rho.Auth do
     |> Keyword.keys()
   end
 
+  @doc "The provider's name for the user, e.g. `\"Claude (Anthropic)\"`."
   @spec label(provider()) :: String.t()
   def label(:anthropic), do: "Claude (Anthropic)"
   def label(:openai_codex), do: "ChatGPT (OpenAI Codex)"
@@ -87,6 +90,12 @@ defmodule Rho.Auth do
   def provider_for_model("google:" <> _), do: {:ok, :google}
   def provider_for_model(_spec), do: :error
 
+  @doc """
+  Stores `provider`'s credentials (the shapes in the moduledoc), replacing
+  what it had. `{:error, :invalid_credentials}` when `creds` doesn't fit
+  the provider, `{:error, :unknown_provider}` for a provider rho doesn't
+  know, `{:error, reason}` when the store failed.
+  """
   @spec put(provider(), creds()) :: :ok | {:error, term()}
   def put(provider, creds) when provider in @providers do
     if valid?(provider, creds),
@@ -104,6 +113,11 @@ defmodule Rho.Auth do
   def put_api_key(provider, key) when is_binary(key),
     do: put(provider, %{"type" => "api_key", "key" => String.trim(key)})
 
+  @doc """
+  `provider`'s stored credentials as they are (no refresh: use
+  `credential/1` for a model call); `:error` when there are none or the
+  store can't be read.
+  """
   @spec get(provider()) :: {:ok, creds()} | :error
   def get(provider) when provider in @providers do
     case CredentialStore.get(account(provider)) do
@@ -128,6 +142,7 @@ defmodule Rho.Auth do
   def delete(provider) when provider in @providers,
     do: GenServer.call(__MODULE__, {:delete, provider})
 
+  @doc "Does `provider` have stored credentials (`get/1`)?"
   @spec signed_in?(provider()) :: boolean()
   def signed_in?(provider), do: match?({:ok, _}, get(provider))
 

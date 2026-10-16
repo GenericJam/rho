@@ -1,6 +1,6 @@
 defmodule Rho.Artifacts do
   @moduledoc """
-  The output budget (DESIGN.md §3): a tool result over #{16} KiB goes to
+  The output budget: a tool result over #{16} KiB goes to
   the model as its head and tail with a marker in the middle; the full
   text is kept as an artifact the agent reads back with the `read_artifact`
   tool, a page of lines at a time.

@@ -33,6 +33,7 @@ defmodule Rho.Supervisor do
 
   alias Rho.Dyn
 
+  @doc "Starts rho's tree, registered as `Rho.Supervisor`, with the options in the moduledoc."
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
 

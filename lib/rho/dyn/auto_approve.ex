@@ -11,8 +11,9 @@ defmodule Rho.Dyn.AutoApprove do
   takes the human's screen lock: `enable/0` needs a fresh confirmation of
   `subject/0` from the configured approval (in the app,
   `Rho.Dyn.Approval.Biometric`, fed only by the approve control's pass).
-  Turning it off needs nothing. Dyn code can't reach this module
-  (`Rho.Dyn.Check`), and no tool calls `enable/0`.
+  Turning it off needs nothing. The static check rejects Dyn code that
+  calls this module (`Rho.Dyn.Check`, best effort), and no tool calls
+  `enable/0`.
   """
 
   alias Rho.CredentialStore

@@ -130,8 +130,8 @@ defmodule Rho.Loop do
   # ── API ──
 
   @doc """
-  Options: `:session` and `:entries` (from `Session.new/3` or
-  `Session.open/2`), `:system_prompt`, `:data_dir` (given to tools),
+  Options: `:session` and `:entries` (from `Rho.Session.new/3` or
+  `Rho.Session.open/2`), `:system_prompt`, `:data_dir` (given to tools),
   `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:withhold_tools` (tool names never offered nor run: `task`
   withholds itself from its subagents), `:before_tool_call` (`fn call,
@@ -197,6 +197,7 @@ defmodule Rho.Loop do
   @spec subscribe(GenServer.server(), pid()) :: :ok
   def subscribe(loop, pid \\ self()), do: GenServer.call(loop, {:subscribe, pid})
 
+  @doc "Stops sending the caller this loop's events (`subscribe/2`)."
   @spec unsubscribe(GenServer.server()) :: :ok
   def unsubscribe(loop), do: GenServer.call(loop, {:unsubscribe, self()})
 

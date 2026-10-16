@@ -7,6 +7,7 @@ defmodule Rho.Dyn.Diff do
 
   @context 3
 
+  @doc "The unified diff from `old` to `new`; `\"\"` when they're the same."
   @spec unified(%{String.t() => String.t()}, %{String.t() => String.t()}) :: String.t()
   def unified(old, new) do
     (Map.keys(old) ++ Map.keys(new))

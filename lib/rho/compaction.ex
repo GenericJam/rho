@@ -4,7 +4,7 @@ defmodule Rho.Compaction do
   (`pi-agent-core/src/compaction/compaction.ts`; omp writes it as
   `method: "soft"`). When a request nears the model's context window, the
   older part of the branch is summarized by the model into a `compaction`
-  entry (`Rho.Session.compaction/4`), and `Session.context/1`
+  entry (`Rho.Session.compaction/4`), and `Rho.Session.context/1`
   sends that summary plus the recent tail from then on.
 
   Pure functions; `Rho.Loop` makes the summary call.

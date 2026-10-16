@@ -5,23 +5,23 @@ defmodule Rho.Dyn.Screens do
   watches Dyn screens the same way whatever the UI; this says what a
   screen is and how the UI tells the Keeper a launch got going:
 
-    * **compiling**: which module bodies are screens (`screen_source?/1`)
-      and the function each screen process enters through (`entry/0`): the
+    * **compiling**: which module bodies are screens (`c:screen_source?/1`)
+      and the function each screen process enters through (`c:entry/0`): the
       compiler wraps it to register the process with the Keeper first
       (`Rho.Dyn.Keeper.watch/3`), so the screen's crash counts against its
       generation;
-    * **selftest**: which loaded modules are screens (`screen?/1`, filed
+    * **selftest**: which loaded modules are screens (`c:screen?/1`, filed
       as `:screen` in the registry, `Rho.Dyn.screens/1`) and how one proves
-      it mounts and renders (`selftest/1`, run in the contained selftest
+      it mounts and renders (`c:selftest/1`, run in the contained selftest
       process);
-    * **launches**: `after_first_render/1` has the UI call an MFA (with the
+    * **launches**: `c:after_first_render/1` has the UI call an MFA (with the
       screen appended) after its first frame, which starts the clock to
-      "stable" (`Rho.Dyn.boot/1`); `subscribe_app_events/0` and
-      `left_app?/1`: the app lifecycle events the Keeper receives, and
+      "stable" (`Rho.Dyn.boot/1`); `c:subscribe_app_events/0` and
+      `c:left_app?/1`: the app lifecycle events the Keeper receives, and
       which of them mean the user left the app (a launch that drew its
       first frame and was left is stable, not failed);
-    * **the agent's view**: `live/1`, is generation `n` on screen yet (so
-      `dyn_propose` with approve-all answers once it is); `guide/0`, the
+    * **the agent's view**: `c:live/1`, is generation `n` on screen yet (so
+      `dyn_propose` with approve-all answers once it is); `c:guide/0`, the
       screen rules for `Rho.Dyn.agent_guide/0`.
 
   `Rho.Dyn.Screens.None` (the default) has no screens; `Rho.Dyn.Screens.Mob`
@@ -68,7 +68,7 @@ defmodule Rho.Dyn.Screens.None do
   @moduledoc """
   No screens (the default `Rho.Dyn.Screens`): Dyn code is tools and
   modules. Without a UI there is no first frame to wait for, so
-  `after_first_render/1` applies the MFA at once: a launch's clock to
+  `c:Rho.Dyn.Screens.after_first_render/1` applies the MFA at once: a launch's clock to
   "stable" starts at `Rho.Dyn.boot/1`.
   """
   @behaviour Rho.Dyn.Screens

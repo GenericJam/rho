@@ -4,7 +4,7 @@ defmodule Rho.LLM do
   one (Anthropic, OpenAI, OpenAI Codex and Google through req_llm, with
   the credential from `Rho.Auth`); tests inject a scripted fake.
 
-  `stream/3` runs in a process the loop owns (and kills on Stop). It calls
+  `c:stream/3` runs in a process the loop owns (and kills on Stop). It calls
   `sink` for every streamed delta and returns the whole reply:
 
     * events: `{:text, delta}`, `{:thinking, delta}`

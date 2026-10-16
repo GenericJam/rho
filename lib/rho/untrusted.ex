@@ -29,10 +29,15 @@ defmodule Rho.Untrusted do
 
   Every text is valid UTF-8 and at most `max` bytes (4000 by default).
 
-  One limit stays the host's: a Dyn process that crashes with an
-  exception whose `message/1` fails in certain ways can make OTP remove
-  Elixir's logger translator VM-wide (later crash logs are untranslated).
-  That code runs in the Dyn process itself, never in a trusted one.
+  Crash reports are a separate path: OTP logs a crashed process's report
+  and Elixir's logger translator formats it, calling the exception's
+  `message/1`. Left alone, a Dyn exception whose `message/1` throws or
+  exits there makes OTP remove the translator VM-wide (later crash logs
+  come out untranslated). `Rho.Dyn.LogGuard`, installed by the Keeper,
+  replaces Dyn terms in log events before the translator sees them, which
+  keeps that call out of the translator; it lets through an event too big
+  to check (more than 10,000 terms before the Dyn one), and a Logger
+  restart removes the filter.
 
   This is about crashes and mistakes, not hostile code: it keeps a Dyn
   term the Core receives from running Dyn code there, which lowers the

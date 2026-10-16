@@ -38,6 +38,7 @@ defmodule Rho.Auth.OAuthFlow do
   @openai_profile_claim "https://api.openai.com/profile"
   @retry_ms 2_000
 
+  @doc "The provider's registered localhost redirect URI (the one `start/2` normally gets)."
   @spec default_redirect(provider()) :: String.t()
   def default_redirect(:anthropic), do: "http://localhost:54545/callback"
   def default_redirect(:openai_codex), do: "http://localhost:1455/auth/callback"

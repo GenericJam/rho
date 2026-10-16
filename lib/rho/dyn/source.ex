@@ -4,7 +4,7 @@ defmodule Rho.Dyn.Source do
   tools, read from the Keeper's registry table on every call, so an
   activation or a revert (by hand, or automatic) changes the tools the
   loop offers from its next model call. Every tool call's task is handed
-  to the Keeper first (`watch/2`), so a Dyn tool's crash, or the kill at
+  to the Keeper first (`c:Rho.ToolRegistry.Source.watch/2`), so a Dyn tool's crash, or the kill at
   its timeout, counts against its generation.
 
   `Rho.Supervisor` adds it to the registry's sources when Dyn is enabled

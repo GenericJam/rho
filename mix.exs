@@ -57,6 +57,65 @@ defmodule Rho.MixProject do
   end
 
   defp docs do
-    [main: "readme", extras: ["README.md", "CHANGELOG.md"], source_ref: "v#{@version}"]
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"],
+      source_ref: "v#{@version}",
+      groups_for_modules: [
+        "Loop & sessions": [Rho, Rho.Loop, Rho.Events, Rho.Session, Rho.Compaction, Rho.Artifacts],
+        Tools: [
+          Rho.Tool,
+          Rho.ToolRegistry,
+          Rho.ToolRegistry.Source,
+          Rho.ToolRunner,
+          Rho.Tools.ReadArtifact,
+          Rho.Tools.Todo
+        ],
+        "Models & usage": [
+          Rho.LLM,
+          Rho.LLM.ReqLLM,
+          Rho.LLMCatalog,
+          Rho.Models,
+          Rho.Usage,
+          Rho.Usage.Fetch,
+          Rho.Budget
+        ],
+        "Sign-in & credentials": [
+          Rho.Auth,
+          Rho.Auth.Login,
+          Rho.Auth.OAuthFlow,
+          Rho.CredentialStore,
+          Rho.CredentialStore.File
+        ],
+        "Host seams": [Rho.Supervisor, Rho.Config, Rho.Settings, Rho.Settings.File],
+        Dyn: [
+          Rho.Dyn,
+          Rho.Dyn.Config,
+          Rho.Dyn.Keeper,
+          Rho.Dyn.Approval,
+          Rho.Dyn.Approval.Biometric,
+          Rho.Dyn.AutoApprove,
+          Rho.Dyn.Screens,
+          Rho.Dyn.Screens.Mob,
+          Rho.Dyn.Screens.None,
+          Rho.Dyn.Seed,
+          Rho.Dyn.Source,
+          Rho.Dyn.Generation,
+          Rho.Dyn.Check,
+          Rho.Untrusted
+        ],
+        "Dyn internals": [
+          Rho.Dyn.Registry,
+          Rho.Dyn.Store,
+          Rho.Dyn.Compiler,
+          Rho.Dyn.Selftest,
+          Rho.Dyn.Reuse,
+          Rho.Dyn.Trace,
+          Rho.Dyn.Diff,
+          Rho.Dyn.LogGuard
+        ],
+        "Dyn tools": ~r/^Rho\.Tools\.Dyn/
+      ]
+    ]
   end
 end

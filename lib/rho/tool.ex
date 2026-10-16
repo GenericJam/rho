@@ -4,7 +4,7 @@ defmodule Rho.Tool do
   can register one at runtime by module, or serve changing sets of them
   from a source (see `Rho.ToolRegistry`).
 
-  `run/2` gets the decoded JSON arguments (string keys) and a context map
+  `c:run/2` gets the decoded JSON arguments (string keys) and a context map
   (`:session_id`, `:call_id`, `:data_dir`; from a loop also `:loop`, its
   pid, and `:withheld`, the tool names that loop doesn't offer, so read it
   with `Map.get(ctx, :withheld, [])`). It returns `{:ok, output}` or
@@ -13,14 +13,14 @@ defmodule Rho.Tool do
   (`{:ok, {:details, output, details}}`), are `Rho.ToolRunner`'s. A raise,
   exit or timeout becomes an error result; it never takes the loop down.
 
-  **Untrusted tools.** The loop reads a tool's declaration (`name/0`,
-  `description/0`, `parameter_schema/0`, `timeout_ms/0`,
-  `concurrency/0`) in its own process. A Dyn tool's
+  **Untrusted tools.** The loop reads a tool's declaration (`c:name/0`,
+  `c:description/0`, `c:parameter_schema/0`, `c:timeout_ms/0`,
+  `c:concurrency/0`) in its own process. A Dyn tool's
   (`Rho.Untrusted.untrusted?/1`) is read instead in one throwaway process
   with a time and heap bound, checked to be plain data and kept for the
   module's life: one whose name, description or schema raises or isn't a
   string / JSON Schema map is left out of what the loop offers (logged
-  once), and a bad `timeout_ms/0` or `concurrency/0` means the default. A
+  once), and a bad `c:timeout_ms/0` or `c:concurrency/0` means the default. A
   read that runs over (a busy phone) leaves the tool out for now and is
   tried again after 1, 5 and 30 minutes; after that it stays out.
   """
@@ -65,9 +65,14 @@ defmodule Rho.Tool do
           concurrency: :parallel | :exclusive
         }
 
+  @doc "The per-call timeout of a tool without `c:timeout_ms/0` (30 000 ms)."
   @spec default_timeout_ms() :: pos_integer()
   def default_timeout_ms, do: @default_timeout_ms
 
+  @doc """
+  `module`'s per-call timeout: its `c:timeout_ms/0`, else
+  `default_timeout_ms/0`. A Dyn tool's comes from its checked declaration.
+  """
   @spec timeout_ms(module()) :: pos_integer()
   def timeout_ms(module) do
     if Untrusted.untrusted?(module) do
@@ -83,7 +88,7 @@ defmodule Rho.Tool do
   end
 
   @doc """
-  `module`'s `concurrency/0`, or `:parallel`. The loop asks it in its own
+  `module`'s `c:concurrency/0`, or `:parallel`. The loop asks it in its own
   process, so anything but `:exclusive`, a raise included, is `:parallel`.
   """
   @spec concurrency(module()) :: :parallel | :exclusive

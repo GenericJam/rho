@@ -1,6 +1,6 @@
 defmodule Rho.Dyn.Compiler do
   @moduledoc """
-  Compiles a source set into generation `n` (the pipeline's step 3, see
+  Compiles a source set into generation `n` (part of the pipeline's step 2, see
   `Rho.Dyn`) and loads, unloads and purges generations' modules.
 
   **Versioned names.** The agent writes `Dyn.Foo` (the namespace,
@@ -88,21 +88,21 @@ defmodule Rho.Dyn.Compiler do
   end
 
   @doc """
-  Compiles checked files (`Check.run/1`'s result) into generation `n`.
+  Compiles checked files (`Rho.Dyn.Check.run/1`'s result) into generation `n`.
 
   Compiling loads what it compiles at once, VM-wide, before any check of
   the result can run. So the compile process's tracer refuses a module
-  outside the generation as its definition starts (`Trace.guard/3`), and
+  outside the generation as its definition starts (`Rho.Dyn.Trace.guard/3`), and
   reports every module this compile defines, with what was loaded under
   that name before. Afterwards, whatever the outcome, each one other than
   the generation's modules and its own protocol implementations
-  (`Check.generation_module?/4`) is undone: a new one unloaded, a replaced
+  (`Rho.Dyn.Check.generation_module?/4`) is undone: a new one unloaded, a replaced
   one reloaded from its file. A module the compile returned that the
   tracer never saw (`Module.create/3` with a keyword list, not an env,
   traces nothing) and that isn't the generation's is undone too: unloaded,
   and reloaded from the code path when a file for it is there. Modules
   other processes define meanwhile (an `eval`, a subagent) are left alone.
-  `Check.beam/2` then rejects a build that had any other.
+  `Rho.Dyn.Check.beam/2` then rejects a build that had any other.
   """
   @spec compile([{String.t(), Macro.t()}], pos_integer(), keyword()) ::
           {:ok, build()} | {:error, {:compile, String.t()}}
@@ -666,9 +666,11 @@ defmodule Rho.Dyn.Compiler do
     end
   end
 
+  @doc false
   @spec sha256(binary()) :: String.t()
   def sha256(bin), do: :sha256 |> :crypto.hash(bin) |> Base.encode16(case: :lower)
 
+  @doc false
   @spec failure_text(String.t() | [Check.violation()]) :: String.t()
   def failure_text(text) when is_binary(text), do: text
   def failure_text(violations), do: Check.format(violations)

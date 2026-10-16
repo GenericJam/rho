@@ -45,6 +45,13 @@ defmodule Rho.ToolRunner do
   @spec allow_all(map(), map()) :: :allow
   def allow_all(_call, _ctx), do: :allow
 
+  @doc """
+  Starts `call` (`%{"arguments" => ...}`) of `module` as a task under
+  `task_sup`, not linked: `gate` first, then the tool, with `ctx` as the
+  context `c:Rho.Tool.run/2` gets. Once the gate allows, the task sends
+  `loop` `{:tool_running, pid}`; it returns `to_result/1` of the tool's
+  answer. This is how `Rho.Loop` runs every call.
+  """
   @spec start(Supervisor.supervisor(), pid(), module(), map(), gate(), map()) :: Task.t()
   def start(task_sup, loop, module, call, gate, ctx) do
     Task.Supervisor.async_nolink(task_sup, fn ->
@@ -112,10 +119,12 @@ defmodule Rho.ToolRunner do
   @spec crash_text(term()) :: String.t()
   def crash_text(reason), do: "Tool crashed: " <> Untrusted.exit_text(reason)
 
+  @doc "The error text for a call killed at `module`'s timeout (`Rho.Tool.timeout_ms/1`)."
   @spec timeout_text(module()) :: String.t()
   def timeout_text(module),
     do: "Tool timed out after #{Tool.timeout_ms(module)} ms and was killed."
 
+  @doc false
   @spec skipped_text() :: String.t()
   def skipped_text, do: "Tool was not executed because the run was stopped by the user."
 
