@@ -1138,8 +1138,15 @@ defmodule Rho.Session do
   def usage(u) do
     cache_read = u[:cache_read_tokens] || u[:cached_tokens] || 0
     cache_write = u[:cache_write_tokens] || u[:cache_creation_tokens] || 0
-    input = max((u[:input_tokens] || 0) - cache_read - cache_write, 0)
     output = u[:output_tokens] || 0
+
+    # pi's input is the uncached part. req_llm's input_tokens holds the
+    # cache's tokens too, except where the provider's doesn't (Anthropic:
+    # input_includes_cached false).
+    input =
+      if u[:input_includes_cached] == false,
+        do: u[:input_tokens] || 0,
+        else: max((u[:input_tokens] || 0) - cache_read - cache_write, 0)
 
     %{
       "input" => input,
@@ -1147,15 +1154,49 @@ defmodule Rho.Session do
       "cacheRead" => cache_read,
       "cacheWrite" => cache_write,
       "totalTokens" => input + output + cache_read + cache_write,
-      "cost" => %{
-        "input" => num(u[:input_cost]),
-        "output" => num(u[:output_cost]),
-        "cacheRead" => 0,
-        "cacheWrite" => 0,
-        "total" => num(u[:total_cost] || u[:cost])
-      }
+      "cost" => cost(u)
     }
   end
+
+  # pi splits the cost as it splits the tokens. req_llm's input_cost also
+  # holds the cache's, so a priced reply's parts come from its line items;
+  # tool calls and pictures count in the total only.
+  defp cost(%{cost: %{line_items: items}} = u) when is_list(items) do
+    parts = %{"input" => 0, "output" => 0, "cacheRead" => 0, "cacheWrite" => 0}
+
+    items
+    |> Enum.reduce(parts, fn item, acc ->
+      case cost_part(item[:component]) do
+        nil -> acc
+        part -> Map.update!(acc, part, &(&1 + num(item[:cost])))
+      end
+    end)
+    |> Map.put("total", num(u[:total_cost]))
+  end
+
+  defp cost(u) do
+    %{
+      "input" => num(u[:input_cost]),
+      "output" => num(u[:output_cost]),
+      "cacheRead" => 0,
+      "cacheWrite" => 0,
+      "total" => num(u[:total_cost] || u[:cost])
+    }
+  end
+
+  # A line item's component id: "token.input", "token.cache_read",
+  # "token.output.long_context", "token.text_cache_read_tokens", ...
+  defp cost_part("token.cache_write" <> _), do: "cacheWrite"
+
+  defp cost_part("token." <> meter) do
+    cond do
+      String.contains?(meter, "cache") -> "cacheRead"
+      String.contains?(meter, "input") -> "input"
+      true -> "output"
+    end
+  end
+
+  defp cost_part(_), do: nil
 
   # req_llm's provider ids where pi's differ, and the `api` pi records per provider.
   @pi_providers %{"openai_codex" => "openai-codex"}

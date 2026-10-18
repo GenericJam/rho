@@ -36,6 +36,17 @@ defmodule Rho.LLM.ReqLLM do
   `Rho.Usage.record/3`: its tokens and cost, the subscription
   windows its response headers report, and a 429's reset.
 
+  The cost is req_llm's, from the reply's usage and llm_db's prices.
+  req_llm prices a reply only when every conditional tariff of the model
+  is settled by the caller's `:pricing_context` (else `usage.pricing` is
+  `%{status: :unknown}`, no cost, and rho counts $0: llm_db's Claude
+  prices carry such conditions), so each call passes what rho's
+  requests are: never batched, never fast mode or a priority / flex
+  tier, no US-only inference or regional processing, Anthropic's default
+  5-minute cache, Gemini's implicit cache. A subscription call is priced
+  the same, at what it would cost on an API key: notional, for the usage
+  screens and the daily cap (`Rho.Budget`).
+
   A 429 (or a 529 overloaded) comes back as `{:rate_limited, limit}`
   (`t:Rho.LLM.limit/0`): its `retry-after`, and when
   a usage window is used up, which one and until when: from the response's
@@ -265,9 +276,38 @@ defmodule Rho.LLM.ReqLLM do
 
     with {:ok, provider} <- provider(request.model),
          {:ok, auth} <- credential(provider, credential) do
-      {:ok, base ++ auth_options(provider, auth, request)}
+      {:ok,
+       base ++
+         auth_options(provider, auth, request) ++
+         [pricing_context: pricing_context(provider)]}
     end
   end
+
+  # The billing facts of rho's requests (see the moduledoc), for llm_db's
+  # conditional components: Claude's `pricing.batch` (api "batch"),
+  # `pricing.fast` (request_body speed "fast"), `pricing.data_residency`
+  # (inference_geo "us") and the cache write's TTL ("5m" / "1h"; a reply
+  # that reports its writes per TTL is priced by those); OpenAI's and
+  # Gemini's batch, `service_tier` (flex, priority, fast) and regional
+  # processing, Gemini's explicit-cache storage. Settling them is what
+  # makes req_llm price a reply at all. Since 1.28 req_llm takes an
+  # `openai:` call's api, region and returned tier from the call itself
+  # (over these); Anthropic's it doesn't:
+  # https://github.com/agentjido/req_llm/issues/1121. A ChatGPT
+  # subscription (`openai_codex:`) call has OpenAI's facts.
+  defp pricing_context(:anthropic),
+    do: %{
+      api: "messages",
+      inference_geo: "global",
+      request_body: %{"speed" => "standard"},
+      cache_ttl: "5m"
+    }
+
+  defp pricing_context(provider) when provider in [:openai, :openai_codex],
+    do: %{api: "responses", service_tier: "default", regional_processing: false}
+
+  defp pricing_context(:google),
+    do: %{api: "generate_content", service_tier: "standard", cache_type: "implicit"}
 
   defp provider(model) do
     case Auth.provider_for_model(model) do
