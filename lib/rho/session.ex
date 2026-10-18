@@ -348,8 +348,10 @@ defmodule Rho.Session do
   `{mime_type, bytes}` each (a screenshot or photos) go in as pi's image
   content parts; `%{ref: ref, mime: mime_type}` (optional `:name`) is a
   picture by reference, stored as the message's `attachments` (kind
-  `"image"`, see `attachments/1`) without its bytes and fetched when a
-  request is built, as a user's referenced picture is. `:details`
+  `"image"`, see `attachments/1`) without its bytes and fetched for each
+  model call, as a user's referenced picture is. The inline ones go before
+  the referenced ones (`Rho.ToolRunner` lets a tool answer with only one
+  form). `:details`
   (JSON-encodable; nil for none) is stored as the message's `details`
   (pi's `ToolResultMessage.details`): data for the host's screens, never
   sent to the model.
@@ -527,31 +529,76 @@ defmodule Rho.Session do
 
   `opts[:inputs]` is what the model takes (`Rho.Models.inputs/1`,
   default `[:text, :image]`): without `:image`, pictures become a note;
-  with `:pdf`, attached PDFs go as documents, read from their paths, the
-  newest first while the request stays inside the provider's limits.
+  with `:pdf`, attached PDFs go as documents, the newest first while the
+  request stays inside the provider's limits.
 
-  Files attached by reference that the model takes (pictures with
-  `:image`, PDFs with `:pdf`) are fetched once each through
-  `Rho.Config.resolve_attachment/2`, given `%{session_id:
-  opts[:session_id]}`; one it can't fetch becomes a note. With
-  `fetch: false` (a text-only use, as compaction's summary) they are left
-  out without fetching.
+  Files whose bytes aren't in the session (pictures attached by reference,
+  PDFs) are fetched by `fetch/2` (given `%{session_id: opts[:session_id]}`)
+  before this returns. With `fetch: false` they are left as placeholders
+  for the caller to `fetch/2` later, in another process (the loop's model
+  call does), or to leave out (a text-only use, as compaction's summary).
   """
   @spec messages([entry()], keyword()) :: [ReqLLM.Message.t()]
   def messages(entries, opts \\ []) do
-    inputs = Keyword.get(opts, :inputs, [:text, :image])
+    ctx = %{inputs: Keyword.get(opts, :inputs, [:text, :image])}
 
-    fetched =
-      if Keyword.get(opts, :fetch, true),
-        do: fetch_refs(entries, inputs, %{session_id: opts[:session_id]}),
-        else: %{}
+    messages =
+      entries
+      |> Enum.flat_map(&to_messages(&1, ctx))
+      |> close_dangling_calls()
 
-    ctx = %{inputs: inputs, fetched: fetched, docs: documents(entries, inputs, fetched)}
-
-    entries
-    |> Enum.flat_map(&to_messages(&1, ctx))
-    |> close_dangling_calls()
+    if Keyword.get(opts, :fetch, true),
+      do: fetch(messages, %{session_id: opts[:session_id]}),
+      else: messages
   end
+
+  @doc """
+  Fills in the placeholders `messages(entries, fetch: false)` left for the
+  files whose bytes aren't in the session. A picture attached by reference
+  comes from the host's `:resolve_attachment` hook
+  (`Rho.Config.resolve_attachment/2`, given `ctx`, `%{session_id: id |
+  nil}`), once per ref; one it can't give becomes the note "(<name>
+  couldn't be loaded, so it isn't sent.)". PDFs (by path, read from it, or
+  by reference, from the hook) go as documents the newest first while the
+  request stays inside the provider's limits (20 MB, 100 pages); the
+  others become a note. The hook may be slow: the loop calls this in its
+  model call's process, not its own.
+  """
+  @spec fetch([ReqLLM.Message.t()], map()) :: [ReqLLM.Message.t()]
+  def fetch(messages, ctx) do
+    files =
+      for {%{content: parts}, i} <- Enum.with_index(messages),
+          is_list(parts),
+          {part, j} <- Enum.with_index(parts),
+          a when a != nil <- [placeholder(part)],
+          do: {{i, j}, part, a}
+
+    if files == [] do
+      messages
+    else
+      # newest first, so the newest documents get the budget
+      {filled, _cache, _budget} =
+        files
+        |> Enum.reverse()
+        |> Enum.reduce({%{}, %{}, {0, 0}}, fn {at, part, a}, {filled, cache, budget} ->
+          {parts, cache, budget} = fill(part, a, cache, budget, ctx)
+          {Map.put(filled, at, parts), cache, budget}
+        end)
+
+      for {m, i} <- Enum.with_index(messages), do: fill_in(m, i, filled)
+    end
+  end
+
+  defp fill_in(%{content: parts} = m, i, filled) when is_list(parts) do
+    parts =
+      parts
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {part, j} -> Map.get(filled, {i, j}, [part]) end)
+
+    %{m | content: parts}
+  end
+
+  defp fill_in(m, _i, _filled), do: m
 
   @doc """
   Splits a branch at its latest `compaction`: `{compaction, kept, later}`.
@@ -599,27 +646,41 @@ defmodule Rho.Session do
   end
 
   defp attachments_note(entries) do
-    lines =
+    files =
       for %{"type" => "message", "message" => %{"role" => "user"} = m} <- entries,
           a <- attachments(m),
-          do: "- #{a["name"]} (#{a["mimeType"]})#{where(a)}: #{a["about"]}"
+          do: a
 
-    if lines == [],
-      do: "",
-      else:
-        "\n\nFiles the user attached before this summary (still in the workspace; " <>
-          "read them again with file_read):\n" <> Enum.join(lines, "\n")
+    {in_workspace, by_ref} = Enum.split_with(files, &is_binary(&1["path"]))
+
+    files_note(
+      "Files the user attached before this summary (still in the workspace; " <>
+        "read them again with file_read):",
+      in_workspace
+    ) <>
+      files_note(
+        "Files the user attached by reference before this summary (not in the workspace):",
+        by_ref
+      )
   end
 
-  defp where(a) do
-    case {a["path"], a["ref"]} do
-      {nil, ref} -> ", ref #{ref}"
-      {path, nil} -> " at #{path}"
-      {path, ref} -> " at #{path}, ref #{ref}"
-    end
+  defp files_note(_heading, []), do: ""
+
+  defp files_note(heading, files) do
+    lines =
+      for a <- files do
+        at = if a["path"], do: " at #{a["path"]}", else: ""
+        ref = if a["ref"], do: ", ref #{a["ref"]}", else: ""
+        "- #{a["name"]} (#{a["mimeType"]})#{at}#{ref}: #{a["about"]}"
+      end
+
+    "\n\n#{heading}\n" <> Enum.join(lines, "\n")
   end
 
   @no_picture "(The picture isn't sent: this model doesn't take pictures.)"
+
+  # The metadata key of a placeholder part (the attachment map), for `fetch/2`.
+  @fetch :rho_fetch
 
   defp to_messages(%{"type" => "message", "message" => %{"role" => role} = m}, ctx)
        when role in ["user", "developer"] do
@@ -649,12 +710,11 @@ defmodule Rho.Session do
       for(%{"type" => "image"} = part <- List.wrap(m["content"]), do: picture(part, ctx)) ++
         for(a <- attachments(m), do: ref_picture(a, ctx))
 
-    images = List.flatten(images)
-
     content =
-      if images == [],
-        do: text(m["content"]),
-        else: [ContentPart.text(text(m["content"])) | images]
+      case List.flatten(images) do
+        [] -> text(m["content"])
+        images -> [ContentPart.text(text(m["content"])) | images]
+      end
 
     [Context.tool_result(m["toolCallId"], m["toolName"], content)]
   end
@@ -724,19 +784,15 @@ defmodule Rho.Session do
 
   defp picture(_part, _ctx), do: []
 
-  defp ref_picture(%{"kind" => "image", "ref" => ref} = a, %{inputs: inputs, fetched: fetched})
+  # A picture by reference: a placeholder `fetch/2` fills in.
+  defp ref_picture(%{"kind" => "image", "ref" => ref, "mimeType" => mime} = a, %{inputs: inputs})
        when is_binary(ref) do
-    case :image in inputs && fetched[{"image", ref}] do
-      false -> [ContentPart.text(@no_picture)]
-      {:ok, {mime, bytes}} -> [ContentPart.image(bytes, mime)]
-      :error -> [ContentPart.text(unfetched(a))]
-      nil -> []
-    end
+    if :image in inputs,
+      do: [ContentPart.image(nil, mime, %{@fetch => a})],
+      else: [ContentPart.text(@no_picture)]
   end
 
   defp ref_picture(_attachment, _ctx), do: []
-
-  defp unfetched(a), do: "(#{a["name"] || a["ref"]} couldn't be loaded, so it isn't sent.)"
 
   defp decode64(data) do
     case Base.decode64(data) do
@@ -745,21 +801,130 @@ defmodule Rho.Session do
     end
   end
 
-  # The bytes of the files attached by reference that this model takes,
-  # `%{{kind, ref} => {:ok, {mime, bytes}} | :error}`, each fetched once.
-  defp fetch_refs(entries, inputs, ctx) do
-    wanted = for {kind, input} <- [{"image", :image}, {"pdf", :pdf}], input in inputs, do: kind
+  # Attached PDFs (by path or by reference): placeholders `fetch/2` fills
+  # in. One by path carries its size, for the token estimate.
+  defp pdf_parts(m, %{inputs: inputs}) do
+    if :pdf in inputs,
+      do: for(%{"kind" => "pdf"} = a <- attachments(m), part <- pdf_placeholder(a), do: part),
+      else: []
+  end
 
-    for %{"type" => "message", "message" => m} <- entries,
-        %{"kind" => kind, "ref" => ref} = a when is_binary(ref) <- attachments(m),
-        kind in wanted,
-        reduce: %{} do
-      acc when is_map_key(acc, {kind, ref}) -> acc
-      acc -> Map.put(acc, {kind, ref}, fetch(a, ctx))
+  defp pdf_placeholder(%{"name" => name} = a) do
+    meta = %{:pages => a["pages"], @fetch => a}
+
+    cond do
+      is_binary(a["ref"]) ->
+        [ContentPart.file(nil, name, "application/pdf", meta)]
+
+      is_binary(a["path"]) ->
+        size =
+          case File.stat(a["path"]) do
+            {:ok, %File.Stat{size: size}} -> size
+            {:error, _} -> nil
+          end
+
+        [ContentPart.file(nil, name, "application/pdf", Map.put(meta, :size, size))]
+
+      true ->
+        []
     end
   end
 
-  defp fetch(%{"kind" => kind, "ref" => ref} = a, ctx) do
+  defp placeholder(%ContentPart{metadata: %{@fetch => a}}), do: a
+  defp placeholder(_part), do: nil
+
+  defp fill(%ContentPart{type: :image}, a, cache, budget, ctx) do
+    case cached(a, cache, ctx) do
+      {{:ok, {mime, bytes}}, cache} -> {[ContentPart.image(bytes, mime)], cache, budget}
+      {:error, cache} -> {[ContentPart.text(unfetched(a))], cache, budget}
+    end
+  end
+
+  defp fill(%ContentPart{type: :file}, a, cache, budget, ctx) do
+    case pdf_bytes(a, cache, budget, ctx) do
+      {{:ok, bytes}, cache} ->
+        case add_document(budget, byte_size(bytes), a["pages"]) do
+          {:ok, budget} ->
+            part = ContentPart.file(bytes, a["name"], "application/pdf", %{pages: a["pages"]})
+            {[part], cache, budget}
+
+          :full ->
+            {[ContentPart.text(not_this_time(a))], cache, budget}
+        end
+
+      {{:skip, note}, cache} ->
+        {[ContentPart.text(note)], cache, budget}
+    end
+  end
+
+  defp unfetched(a), do: "(#{a["name"] || a["ref"]} couldn't be loaded, so it isn't sent.)"
+
+  defp not_this_time(a) do
+    "(#{a["name"]} isn't sent as a document this time: newer documents fill the request." <>
+      if(a["path"], do: " It's at #{a["path"]}.)", else: ")")
+  end
+
+  # A PDF's bytes, unless its page count (or, by path, its size) is already
+  # over what's left of the budget: `{{:ok, bytes} | {:skip, note}, cache}`.
+  defp pdf_bytes(a, cache, budget, ctx) do
+    known = a["pages"]
+
+    cond do
+      is_integer(known) and add_document(budget, 0, known) == :full ->
+        {{:skip, not_this_time(a)}, cache}
+
+      is_binary(a["ref"]) ->
+        case cached(a, cache, ctx) do
+          {{:ok, {_mime, bytes}}, cache} -> {{:ok, bytes}, cache}
+          {:error, cache} -> {{:skip, unfetched(a)}, cache}
+        end
+
+      true ->
+        {pdf_file(a, budget), cache}
+    end
+  end
+
+  defp pdf_file(%{"path" => path, "name" => name} = a, budget) do
+    gone = {:skip, "(#{name} is no longer at #{path}.)"}
+
+    with {:ok, %File.Stat{size: size}} <- File.stat(path),
+         {:ok, _budget} <- add_document(budget, size, a["pages"]),
+         {:ok, bytes} <- File.read(path) do
+      {:ok, bytes}
+    else
+      :full -> {:skip, not_this_time(a)}
+      {:error, _} -> gone
+    end
+  end
+
+  # The attached PDFs sent as documents: the newest first, while the request
+  # stays inside the provider's limits (Anthropic: 32 MB and 100 pages);
+  # a count the PDF hides is a page per 100 KB.
+  @docs_bytes 20_000_000
+  @docs_pages 100
+
+  defp add_document({bytes, pages}, size, known) do
+    more = known || max(1, div(size, 100_000))
+
+    if bytes + size <= @docs_bytes and pages + more <= @docs_pages,
+      do: {:ok, {bytes + size, pages + more}},
+      else: :full
+  end
+
+  # A file by reference from the host's hook, once per `{kind, ref}`:
+  # `{{:ok, {mime, bytes}} | :error, cache}`.
+  defp cached(%{"kind" => kind, "ref" => ref} = a, cache, ctx) do
+    case cache do
+      %{{^kind, ^ref} => result} ->
+        {result, cache}
+
+      _ ->
+        result = resolve(a, ctx)
+        {result, Map.put(cache, {kind, ref}, result)}
+    end
+  end
+
+  defp resolve(%{"kind" => kind, "ref" => ref} = a, ctx) do
     case Rho.Config.resolve_attachment(a, ctx) do
       {:ok, {mime, bytes}} when is_binary(mime) and is_binary(bytes) ->
         {:ok, {mime, bytes}}
@@ -773,91 +938,6 @@ defmodule Rho.Session do
       Logger.warning("[session] #{kind} #{ref} not loaded: #{inspect({class, reason}, limit: 5)}")
 
       :error
-  end
-
-  defp pdf_parts(m, %{inputs: inputs} = ctx) do
-    if :pdf in inputs,
-      do: for(%{"kind" => "pdf"} = a <- attachments(m), part <- pdf_part(a, ctx), do: part),
-      else: []
-  end
-
-  defp pdf_part(%{"ref" => ref, "name" => name} = a, %{fetched: fetched, docs: docs})
-       when is_binary(ref) do
-    case fetched[{"pdf", ref}] do
-      {:ok, {_mime, bytes}} ->
-        if MapSet.member?(docs, {:ref, ref}),
-          do: [ContentPart.file(bytes, name, "application/pdf", %{pages: a["pages"]})],
-          else: [ContentPart.text(not_this_time(name, a["path"]))]
-
-      :error ->
-        [ContentPart.text(unfetched(a))]
-
-      nil ->
-        []
-    end
-  end
-
-  defp pdf_part(%{"path" => path, "name" => name} = a, %{docs: docs}) do
-    cond do
-      not File.exists?(path) ->
-        [ContentPart.text("(#{name} is no longer at #{path}.)")]
-
-      MapSet.member?(docs, path) ->
-        [ContentPart.file(File.read!(path), name, "application/pdf", %{pages: a["pages"]})]
-
-      true ->
-        [ContentPart.text(not_this_time(name, path))]
-    end
-  end
-
-  defp pdf_part(_attachment, _ctx), do: []
-
-  defp not_this_time(name, path) do
-    "(#{name} isn't sent as a document this time: newer documents fill the request." <>
-      if(path, do: " It's at #{path}.)", else: ")")
-  end
-
-  # The attached PDFs sent as documents: the newest first, while the request
-  # stays inside the provider's limits (Anthropic: 32 MB and 100 pages). A
-  # document by reference is `{:ref, ref}`, one by path its path.
-  @docs_bytes 20_000_000
-  @docs_pages 100
-
-  defp documents(entries, inputs, fetched),
-    do: if(:pdf in inputs, do: fit_documents(entries, fetched), else: MapSet.new())
-
-  defp fit_documents(entries, fetched) do
-    pdfs =
-      for %{"type" => "message", "message" => %{"role" => "user"} = m} <- Enum.reverse(entries),
-          %{"kind" => "pdf"} = a <- Enum.reverse(attachments(m)),
-          {key, size} <- document(a, fetched),
-          # a count the PDF hides: a page per 100 KB
-          do: {key, size, a["pages"] || max(1, div(size, 100_000))}
-
-    {docs, _bytes, _pages} = Enum.reduce(pdfs, {MapSet.new(), 0, 0}, &add_document/2)
-    docs
-  end
-
-  defp document(%{"ref" => ref}, fetched) when is_binary(ref) do
-    case fetched[{"pdf", ref}] do
-      {:ok, {_mime, bytes}} -> [{{:ref, ref}, byte_size(bytes)}]
-      _ -> []
-    end
-  end
-
-  defp document(%{"path" => path}, _fetched) do
-    case File.stat(path) do
-      {:ok, %File.Stat{size: size}} -> [{path, size}]
-      _ -> []
-    end
-  end
-
-  defp document(_attachment, _fetched), do: []
-
-  defp add_document({key, size, more}, {docs, bytes, pages}) do
-    if bytes + size <= @docs_bytes and pages + more <= @docs_pages,
-      do: {MapSet.put(docs, key), bytes + size, pages + more},
-      else: {docs, bytes, pages}
   end
 
   defp close_dangling_calls(messages) do

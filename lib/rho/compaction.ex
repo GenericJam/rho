@@ -191,12 +191,34 @@ defmodule Rho.Compaction do
   @spec estimate(String.t()) :: non_neg_integer()
   def estimate(text), do: div(byte_size(text) + 3, 4)
 
-  @doc "Estimated tokens of a whole request: system prompt, tool declarations, messages."
+  # pi's estimateTokens counts a picture as 4,800 characters (1,200 tokens).
+  # A PDF page costs Claude 1,500-3,000 tokens (text plus the page's
+  # image): 2,000 a page; without a page count, a page per 100 KB (one
+  # page when the size isn't known either: a document not fetched yet).
+  @image_tokens 1_200
+  @page_tokens 2_000
+
+  # The provider's documents limit (`Rho.Session.fetch/2` keeps to it).
+  @docs_pages 100
+
+  @doc """
+  Estimated tokens of a whole request: system prompt, tool declarations,
+  messages. A file not fetched yet (`Rho.Session.fetch/2`) counts as what
+  it will be: a picture, or a document by its page count; the documents
+  together at most the provider's 100 pages.
+  """
   @spec request_tokens(LLM.request()) :: non_neg_integer()
   def request_tokens(request) do
+    {docs, others} =
+      request.messages
+      |> Enum.flat_map(& &1.content)
+      |> Enum.split_with(&match?(%ContentPart{type: :file}, &1))
+
     estimate(request.system_prompt) +
       Enum.sum_by(request.tools, &tool_tokens/1) +
-      Enum.sum_by(request.messages, &message_tokens/1)
+      Enum.sum_by(others, &part_tokens/1) +
+      min(Enum.sum_by(docs, &part_tokens/1), @docs_pages * @page_tokens) +
+      Enum.sum_by(request.messages, &call_tokens/1)
   end
 
   @doc """
@@ -391,33 +413,27 @@ defmodule Rho.Compaction do
     estimate(name) + estimate(description) + estimate(json)
   end
 
-  # pi's estimateTokens counts a picture as 4,800 characters (1,200 tokens).
-  # A PDF page costs Claude 1,500-3,000 tokens (text plus the page's
-  # image): 2,000 a page; without a page count, a page per 100 KB.
-  @image_tokens 1_200
-  @page_tokens 2_000
+  defp part_tokens(%ContentPart{type: :text, text: text}) when is_binary(text), do: estimate(text)
+  defp part_tokens(%ContentPart{type: :image}), do: @image_tokens
 
-  defp message_tokens(%Message{content: parts, tool_calls: calls}) do
-    Enum.sum_by(parts, fn
-      %ContentPart{type: :text, text: text} when is_binary(text) ->
-        estimate(text)
+  defp part_tokens(%ContentPart{type: :file, data: data} = p) do
+    meta = p.metadata || %{}
 
-      %ContentPart{type: :image} ->
-        @image_tokens
-
-      %ContentPart{type: :file, data: data} = p when is_binary(data) ->
-        pdf_tokens(p.metadata[:pages], byte_size(data))
-
-      _part ->
-        0
-    end) +
-      Enum.sum_by(calls || [], fn %ToolCall{function: f} ->
-        estimate(f.name) + estimate(f.arguments || "")
-      end)
+    cond do
+      is_integer(meta[:pages]) -> meta[:pages] * @page_tokens
+      is_binary(data) -> max(1, div(byte_size(data), 100_000)) * @page_tokens
+      is_integer(meta[:size]) -> max(1, div(meta[:size], 100_000)) * @page_tokens
+      true -> @page_tokens
+    end
   end
 
-  defp pdf_tokens(pages, _bytes) when is_integer(pages), do: pages * @page_tokens
-  defp pdf_tokens(_pages, bytes), do: max(1, div(bytes, 100_000)) * @page_tokens
+  defp part_tokens(_part), do: 0
+
+  defp call_tokens(%Message{tool_calls: calls}) do
+    Enum.sum_by(calls || [], fn %ToolCall{function: f} ->
+      estimate(f.name) + estimate(f.arguments || "")
+    end)
+  end
 
   # What an entry adds to the context (thinking is never sent back).
   defp entry_tokens(%{"type" => "message", "message" => %{"role" => "assistant"} = m}) do

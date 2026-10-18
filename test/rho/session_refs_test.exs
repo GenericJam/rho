@@ -188,9 +188,72 @@ defmodule Rho.SessionRefsTest do
     assert note =~ "doesn't take pictures"
     assert resolved_refs() == []
 
-    # a text-only use (compaction's summary) leaves them out without fetching
-    assert [%{content: [%{text: "<attachment " <> _}]}] = Session.messages(entries, fetch: false)
+    # fetch: false leaves a placeholder for fetch/2, which may run elsewhere
+    assert [%{content: [_envelope, %{type: :image, data: nil}]}] =
+             unfetched = Session.messages(entries, fetch: false)
+
     assert resolved_refs() == []
+
+    assert [%{content: [_, %{type: :image, data: @jpeg}]}] =
+             Session.fetch(unfetched, %{session_id: "s-1"})
+
+    assert_received {:resolved, "m-1", %{session_id: "s-1"}}
+  end
+
+  test "the hook runs in the model call's process: the loop answers while it waits",
+       %{tmp_dir: dir} do
+    test = self()
+
+    Application.put_env(:rho, :resolve_attachment, fn _a, _ctx ->
+      send(test, {:fetching, self()})
+      receive do: (:go -> {:ok, {"image/jpeg", @jpeg}})
+    end)
+
+    %{loop: loop, llm: llm} = start_loop(dir, [[{:text, "a cat"}]])
+    :ok = Loop.prompt(loop, "", [photo("m-1")])
+    assert_receive {:fetching, fetcher}
+
+    refute fetcher == loop
+    assert %{status: :running} = Loop.snapshot(loop)
+
+    send(fetcher, :go)
+    collect()
+    [request] = FakeLLM.requests(llm)
+    assert [%{content: [_, %{type: :image, data: @jpeg}]}] = request.messages
+  end
+
+  test "a PDF attached twice counts twice against the budget; one over it isn't fetched" do
+    resolve_with(%{"p-1" => {:ok, {"application/pdf", "%PDF one"}}})
+
+    pdf = %{
+      kind: :pdf,
+      name: "big.pdf",
+      mime: "application/pdf",
+      about: "x",
+      ref: "p-1",
+      pages: 60
+    }
+
+    entries = [Session.user("a", attachments: [pdf]), Session.user("b", attachments: [pdf])]
+
+    [first, again] = Session.messages(entries, inputs: [:text, :pdf])
+    assert [_, _, %{type: :file, data: "%PDF one"}] = again.content
+
+    assert [_, _, %{type: :text, text: "(big.pdf isn't sent as a document this time" <> _}] =
+             first.content
+
+    # the second is over by its page count alone: fetched once, for the first
+    assert resolved_refs() == ["p-1"]
+  end
+
+  test "a tool can't mix inline pictures and pictures by reference" do
+    images = [{"image/png", <<1>>}, %{ref: "m-1", mime: "image/png"}]
+
+    assert {:error, "tool returned pictures both inline and by reference; use one form"} =
+             Rho.ToolRunner.to_result({:ok, {:images, images, "two"}})
+
+    assert {:error, "tool returned malformed images"} =
+             Rho.ToolRunner.to_result({:ok, {:images, [%{ref: 1, mime: "image/png"}], "x"}})
   end
 
   test "PDFs by reference go as documents, newest first within 100 pages" do

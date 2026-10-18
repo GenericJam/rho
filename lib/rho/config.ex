@@ -49,10 +49,12 @@ defmodule Rho.Config do
       when a host builds the context itself without one). It returns
       `{:ok, {mime_type, bytes}}`, ready for the model (any resizing is the
       host's), or `{:error, reason}`. It is called for referenced pictures
-      when the model takes pictures and PDFs when it takes PDFs, once each
-      every time the loop builds a request, in the loop's process: keep it
-      quick (a file read). Default: none, so a referenced file reaches the
-      model as a note saying it couldn't be loaded.
+      when the model takes pictures and PDFs when it takes PDFs, once per
+      ref every time the loop makes a model call, in that call's process
+      (`Rho.Session.fetch/2`), not the loop's, so a slow store doesn't
+      hold up the loop; the call waits for it. Default: none, so a
+      referenced file reaches the model as a note saying it couldn't be
+      loaded.
     * `:dyn`: the Dyn layer (agent-written code, `Rho.Dyn`), off by
       default; its keys are `Rho.Dyn.Config`'s.
   """
