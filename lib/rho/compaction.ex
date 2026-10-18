@@ -191,12 +191,47 @@ defmodule Rho.Compaction do
   @spec estimate(String.t()) :: non_neg_integer()
   def estimate(text), do: div(byte_size(text) + 3, 4)
 
-  @doc "Estimated tokens of a whole request: system prompt, tool declarations, messages."
+  # pi's estimateTokens counts a picture as 4,800 characters (1,200 tokens).
+  # A PDF page costs Claude 1,500-3,000 tokens (text plus the page's
+  # image): 2,000 a page; without a page count, a page per 100 KB (one
+  # page when the size isn't known either: a document not fetched yet).
+  @image_tokens 1_200
+  @page_tokens 2_000
+
+  # The provider's documents limit (`Rho.Session.fetch/2` keeps to it).
+  @docs_pages 100
+
+  @doc """
+  Estimated tokens of a whole request: system prompt, tool declarations,
+  messages. A file not fetched yet (`Rho.Session.fetch/2`) counts as what
+  it will be: a picture, or a document by its page count, admitted newest
+  first within the provider's 100 pages as `fetch/2` admits them.
+  """
   @spec request_tokens(LLM.request()) :: non_neg_integer()
   def request_tokens(request) do
+    {docs, others} =
+      request.messages
+      |> Enum.flat_map(& &1.content)
+      |> Enum.split_with(&match?(%ContentPart{type: :file}, &1))
+
     estimate(request.system_prompt) +
       Enum.sum_by(request.tools, &tool_tokens/1) +
-      Enum.sum_by(request.messages, &message_tokens/1)
+      Enum.sum_by(others, &part_tokens/1) +
+      docs_tokens(docs |> Enum.reverse() |> Enum.map(&doc_pages/1)) +
+      Enum.sum_by(request.messages, &call_tokens/1)
+  end
+
+  # The documents a request carries, given their page counts newest first:
+  # each goes while the pages so far stay within the provider's limit.
+  defp docs_tokens(pages_newest_first) do
+    {tokens, _pages} =
+      Enum.reduce(pages_newest_first, {0, 0}, fn more, {tokens, pages} ->
+        if pages + more <= @docs_pages,
+          do: {tokens + more * @page_tokens, pages + more},
+          else: {tokens, pages}
+      end)
+
+    tokens
   end
 
   @doc """
@@ -213,10 +248,27 @@ defmodule Rho.Compaction do
     reported =
       case last_usage(later) do
         nil -> 0
-        {usage, trailing} -> context_size(usage) + Enum.sum_by(trailing, &entry_tokens/1)
+        {usage, trailing} -> context_size(usage) + trailing_tokens(trailing, request)
       end
 
     max(reported, request_tokens(request))
+  end
+
+  # The entries after the last reported usage; their PDFs only when the
+  # request carries documents (the model takes them).
+  defp trailing_tokens(trailing, request) do
+    pdfs =
+      if documents?(request),
+        do: for(e <- Enum.reverse(trailing), p <- Enum.reverse(pdf_pages(e)), do: p),
+        else: []
+
+    Enum.sum_by(trailing, &body_tokens/1) + docs_tokens(pdfs)
+  end
+
+  defp documents?(request) do
+    Enum.any?(request.messages, fn m ->
+      Enum.any?(m.content, &match?(%ContentPart{type: :file}, &1))
+    end)
   end
 
   # ── where ──
@@ -306,7 +358,7 @@ defmodule Rho.Compaction do
   def summary_request(plan, model, max_tokens, window) do
     conversation =
       plan.entries
-      |> Session.messages()
+      |> Session.messages(fetch: false)
       |> Enum.flat_map(&serialize/1)
       |> Enum.join("\n\n")
       |> escape_tags()
@@ -391,53 +443,56 @@ defmodule Rho.Compaction do
     estimate(name) + estimate(description) + estimate(json)
   end
 
-  # pi's estimateTokens counts a picture as 4,800 characters (1,200 tokens).
-  # A PDF page costs Claude 1,500-3,000 tokens (text plus the page's
-  # image): 2,000 a page; without a page count, a page per 100 KB.
-  @image_tokens 1_200
-  @page_tokens 2_000
+  defp part_tokens(%ContentPart{type: :text, text: text}) when is_binary(text), do: estimate(text)
+  defp part_tokens(%ContentPart{type: :image}), do: @image_tokens
+  defp part_tokens(_part), do: 0
 
-  defp message_tokens(%Message{content: parts, tool_calls: calls}) do
-    Enum.sum_by(parts, fn
-      %ContentPart{type: :text, text: text} when is_binary(text) ->
-        estimate(text)
+  defp doc_pages(%ContentPart{type: :file, data: data} = p) do
+    meta = p.metadata || %{}
 
-      %ContentPart{type: :image} ->
-        @image_tokens
-
-      %ContentPart{type: :file, data: data} = p when is_binary(data) ->
-        pdf_tokens(p.metadata[:pages], byte_size(data))
-
-      _part ->
-        0
-    end) +
-      Enum.sum_by(calls || [], fn %ToolCall{function: f} ->
-        estimate(f.name) + estimate(f.arguments || "")
-      end)
+    cond do
+      is_integer(meta[:pages]) -> meta[:pages]
+      is_binary(data) -> max(1, div(byte_size(data), 100_000))
+      is_integer(meta[:size]) -> max(1, div(meta[:size], 100_000))
+      true -> 1
+    end
   end
 
-  defp pdf_tokens(pages, _bytes) when is_integer(pages), do: pages * @page_tokens
-  defp pdf_tokens(_pages, bytes), do: max(1, div(bytes, 100_000)) * @page_tokens
+  defp call_tokens(%Message{tool_calls: calls}) do
+    Enum.sum_by(calls || [], fn %ToolCall{function: f} ->
+      estimate(f.name) + estimate(f.arguments || "")
+    end)
+  end
 
   # What an entry adds to the context (thinking is never sent back).
-  defp entry_tokens(%{"type" => "message", "message" => %{"role" => "assistant"} = m}) do
+  defp entry_tokens(entry),
+    do: body_tokens(entry) + Enum.sum_by(pdf_pages(entry), &(&1 * @page_tokens))
+
+  defp body_tokens(%{"type" => "message", "message" => %{"role" => "assistant"} = m}) do
     estimate(Session.text(m["content"])) +
       Enum.sum_by(Session.tool_calls(m), fn c ->
         estimate(c["name"] || "") + estimate(Jason.encode!(c["arguments"] || %{}))
       end)
   end
 
-  defp entry_tokens(%{"type" => "message", "message" => m}) do
-    pictures = for %{"type" => "image"} <- List.wrap(m["content"]), do: @image_tokens
+  defp body_tokens(%{"type" => "message", "message" => m}) do
+    # inline pictures are image parts; ones by reference are only attachments
+    pictures =
+      for(%{"type" => "image"} <- List.wrap(m["content"]), do: @image_tokens) ++
+        for(%{"kind" => "image", "ref" => _} <- Session.attachments(m), do: @image_tokens)
 
-    pdfs =
-      for %{"kind" => "pdf"} = a <- Session.attachments(m), do: (a["pages"] || 1) * @page_tokens
-
-    estimate(Session.text(m["content"])) + Enum.sum(pictures) + Enum.sum(pdfs)
+    estimate(Session.text(m["content"])) + Enum.sum(pictures)
   end
 
-  defp entry_tokens(%{"type" => "custom_message", "content" => c}), do: estimate(Session.text(c))
-  defp entry_tokens(_entry), do: 0
+  defp body_tokens(%{"type" => "custom_message", "content" => c}), do: estimate(Session.text(c))
+  defp body_tokens(_entry), do: 0
+
+  # The page counts of a message's attached PDFs, in order.
+  defp pdf_pages(%{"type" => "message", "message" => %{"role" => role} = m})
+       when role != "assistant",
+       do: for(%{"kind" => "pdf"} = a <- Session.attachments(m), do: a["pages"] || 1)
+
+  defp pdf_pages(_entry), do: []
 
   # The last successful reply with usage, and the entries after it.
   defp last_usage(entries) do

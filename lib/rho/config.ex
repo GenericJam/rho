@@ -40,6 +40,21 @@ defmodule Rho.Config do
       `Rho.Dyn.Approval.Biometric` behind an approve control).
     * `:tools`, `:tool_sources`: `Rho.ToolRegistry`'s core tools and
       registry sources, when `Rho.Supervisor` isn't given them.
+    * `:resolve_attachment`: how rho gets the bytes of a file the host
+      attached by reference (`ref` in `t:Rho.Session.attachment/0`, or a
+      tool's `%{ref: …}` picture), `fn attachment, ctx -> … end` or an
+      MFA taking those two last. `attachment` is the stored map
+      (`Rho.Session.attachments/1`: `"kind"`, `"ref"`, `"mimeType"`,
+      `"name"`, ...), `ctx` is `%{session_id: id}` (the loop's session; nil
+      when a host builds the context itself without one). It returns
+      `{:ok, {mime_type, bytes}}`, ready for the model (any resizing is the
+      host's), or `{:error, reason}`. It is called for referenced pictures
+      when the model takes pictures and PDFs when it takes PDFs, once per
+      kind and ref every time the loop makes a model call, in that call's process
+      (`Rho.Session.fetch/2`), not the loop's, so a slow store doesn't
+      hold up the loop; the call waits for it. Default: none, so a
+      referenced file reaches the model as a note saying it couldn't be
+      loaded.
     * `:dyn`: the Dyn layer (agent-written code, `Rho.Dyn`), off by
       default; its keys are `Rho.Dyn.Config`'s.
   """
@@ -105,6 +120,19 @@ defmodule Rho.Config do
   @doc "The `:app_name` the sign-in pages show."
   @spec app_name() :: String.t()
   def app_name, do: Application.get_env(:rho, :app_name, "the app")
+
+  @doc """
+  The bytes of a file attached by reference, from the `:resolve_attachment`
+  hook (`{:error, :no_resolver}` without one). `ctx` is
+  `%{session_id: id | nil}`.
+  """
+  @spec resolve_attachment(map(), map()) :: {:ok, {String.t(), binary()}} | {:error, term()}
+  def resolve_attachment(attachment, ctx) do
+    case Application.get_env(:rho, :resolve_attachment) do
+      nil -> {:error, :no_resolver}
+      hook -> resolve(hook, [attachment, ctx])
+    end
+  end
 
   @default_hints [
     sign_in: "from the app's settings",

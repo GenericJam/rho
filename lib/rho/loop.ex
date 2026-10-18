@@ -149,22 +149,31 @@ defmodule Rho.Loop do
   @doc """
   Starts a run. `{:error, :running}` if one is in progress (use `steer/3`).
   `attachments` (`t:Rho.Session.attachment/0`) go with the message;
-  `text` may then be empty.
+  `text` may then be empty. One attached by reference (`:ref`) is stored
+  without its bytes and fetched through the `:resolve_attachment` hook
+  (`Rho.Config`) for each request. Raises `ArgumentError` for an
+  attachment with neither `:path` nor `:ref`.
   """
   @spec prompt(GenServer.server(), String.t(), [Session.attachment()]) ::
           :ok | {:error, :running}
-  def prompt(loop, text, attachments \\ []),
-    do: GenServer.call(loop, {:prompt, {text, attachments}})
+  def prompt(loop, text, attachments \\ []) do
+    :ok = Session.check_attachments!(attachments)
+    GenServer.call(loop, {:prompt, {text, attachments}})
+  end
 
   @doc "Injects `text` at the next step boundary; starts a run if idle."
   @spec steer(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
-  def steer(loop, text, attachments \\ []),
-    do: GenServer.call(loop, {:steer, {text, attachments}})
+  def steer(loop, text, attachments \\ []) do
+    :ok = Session.check_attachments!(attachments)
+    GenServer.call(loop, {:steer, {text, attachments}})
+  end
 
   @doc "Runs `text` once the agent would otherwise stop; starts a run if idle."
   @spec follow_up(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
-  def follow_up(loop, text, attachments \\ []),
-    do: GenServer.call(loop, {:follow_up, {text, attachments}})
+  def follow_up(loop, text, attachments \\ []) do
+    :ok = Session.check_attachments!(attachments)
+    GenServer.call(loop, {:follow_up, {text, attachments}})
+  end
 
   @doc """
   A question from another agent (another node's, through the host's
@@ -212,9 +221,15 @@ defmodule Rho.Loop do
   @spec snapshot(GenServer.server()) :: map()
   def snapshot(loop), do: GenServer.call(loop, :snapshot)
 
-  @doc "The req_llm messages the next model call would send (no system prompt)."
+  @doc """
+  The req_llm messages the next model call would send (no system prompt),
+  its files fetched (`Rho.Session.fetch/2`) in the caller's process.
+  """
   @spec context(GenServer.server()) :: [ReqLLM.Message.t()]
-  def context(loop), do: GenServer.call(loop, :context)
+  def context(loop) do
+    {messages, session_id} = GenServer.call(loop, :context)
+    Session.fetch(messages, %{session_id: session_id})
+  end
 
   @doc """
   `%{session, opts}`: this loop's session and the options it was started
@@ -313,7 +328,7 @@ defmodule Rho.Loop do
   end
 
   def handle_call(:context, _from, s),
-    do: {:reply, Session.context(Enum.reverse(s.entries_rev), inputs(s)), s}
+    do: {:reply, {Session.context(Enum.reverse(s.entries_rev), inputs(s)), s.session.id}, s}
 
   def handle_call(:config, _from, s),
     do: {:reply, %{session: s.session, opts: Map.to_list(s.opts)}, s}
@@ -533,6 +548,12 @@ defmodule Rho.Loop do
     {pid, ref} =
       spawn_monitor(fn ->
         me = self()
+        # the files the session holds no bytes of (the host's hook may be slow)
+        request = %{
+          request
+          | messages: Session.fetch(request.messages, %{session_id: request.session_id})
+        }
+
         result = mod.stream(request, llm_opts, &send(loop, {:llm_event, me, &1}))
         send(loop, {:llm_done, me, result})
       end)
@@ -558,8 +579,11 @@ defmodule Rho.Loop do
     }
   end
 
-  # What the model takes (pictures, PDFs); the `:inputs` option overrides it.
-  defp inputs(s), do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model)]
+  # What the model takes (pictures, PDFs); the `:inputs` option overrides
+  # it. The files the session holds no bytes of stay placeholders, fetched
+  # by the model call's process (`start_attempt/2`), never this one.
+  defp inputs(s),
+    do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model), fetch: false]
 
   # The tools the next call offers. The wrap-up at the limit keeps them: a
   # conversation holding tool calls must declare its tools (Anthropic rejects

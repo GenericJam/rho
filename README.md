@@ -111,6 +111,7 @@ them all):
 | `:namespace` (`customType` of the loop's notices in a session) | `"rho"` | |
 | `:app_name`, `:hints` (where the user signs in or switches model, in messages; how they approve a Dyn generation, in the agent's Dyn text) | "the app", "the app's settings", "on the phone with the screen lock" | |
 | Attachments (`t:Rho.Session.attachment/0`: pictures, text, PDFs with a user message) | none: the host builds them from its pickers and camera | |
+| `:resolve_attachment` (`fn attachment, ctx -> {:ok, {mime, bytes}} \| {:error, reason} end` or an MFA): the bytes of a file attached by reference (`ref:` in an attachment, or a tool's `%{ref: …}` picture), whose session entry keeps only the ref and metadata | none: a referenced file reaches the model as a note | the app's materials store |
 | Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM` | |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
 

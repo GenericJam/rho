@@ -23,7 +23,14 @@ defmodule Rho.ToolRunner do
 
   A tool may answer with pictures for the model as well as text:
   `{:ok, {:images, [{mime_type, bytes}], text}}` (photos), or
-  `{:ok, {:image, mime_type, bytes, text}}` for one (a screenshot).
+  `{:ok, {:image, mime_type, bytes, text}}` for one (a screenshot). A
+  picture the host already keeps (a tool that saved what it drew) may go
+  by reference instead, `%{ref: ref, mime: mime_type}` (optional `:name`)
+  in the `:images` list: the session stores the ref, not the bytes, and
+  the host's `:resolve_attachment` hook (`Rho.Config`) gives them back
+  when a request is built (`Rho.Session.tool_result/5`). One answer's
+  pictures are all of one form (the two are stored apart, so a mix would
+  lose their order); a mix is an error.
 
   And with data for the host's screens beside what the model reads (pi's
   tool result `details`): `{:ok, {:details, output, details}}`, where
@@ -74,7 +81,14 @@ defmodule Rho.ToolRunner do
   defp answer(value, module),
     do: if(Untrusted.untrusted?(module), do: Untrusted.plain(value), else: value)
 
-  @type images :: {:images, [{String.t(), binary()}], String.t()}
+  @type image ::
+          {String.t(), binary()}
+          | %{
+              required(:ref) => String.t(),
+              required(:mime) => String.t(),
+              optional(:name) => String.t()
+            }
+  @type images :: {:images, [image()], String.t()}
   @type result :: {:ok, String.t() | images()} | {:error, String.t()}
 
   @doc """
@@ -95,9 +109,16 @@ defmodule Rho.ToolRunner do
 
   def to_result({:ok, {:images, images, text} = result})
       when is_list(images) and is_binary(text) do
-    if Enum.all?(images, &match?({mime, data} when is_binary(mime) and is_binary(data), &1)),
-      do: {:ok, result},
-      else: {:error, "tool returned malformed images"}
+    cond do
+      not Enum.all?(images, &image?/1) ->
+        {:error, "tool returned malformed images"}
+
+      Enum.any?(images, &is_map/1) and Enum.any?(images, &is_tuple/1) ->
+        {:error, "tool returned pictures both inline and by reference; use one form"}
+
+      true ->
+        {:ok, result}
+    end
   end
 
   def to_result({:ok, value}), do: {:ok, to_text(value)}
@@ -109,6 +130,13 @@ defmodule Rho.ToolRunner do
 
   def to_result(other),
     do: {:error, "tool returned an unexpected value: #{inspect(other, limit: 20)}"}
+
+  defp image?({mime, data}), do: is_binary(mime) and is_binary(data)
+
+  defp image?(%{ref: ref, mime: mime} = image),
+    do: is_binary(ref) and is_binary(mime) and is_binary(Map.get(image, :name, ""))
+
+  defp image?(_image), do: false
 
   @doc """
   The error text for a tool task that ended abnormally (its `:DOWN`
