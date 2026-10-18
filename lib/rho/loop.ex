@@ -563,11 +563,19 @@ defmodule Rho.Loop do
 
   defp begin_turn(s, inputs), do: turn(s, inputs)
 
+  # The messages a turn at the limit doesn't send: the user's, and another
+  # model's (`Rho.Session.model_message/4`).
   defp dropped(inputs) do
-    for %{"message" => m} <- inputs do
-      case Session.typed(m) do
-        "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
-        text -> text
+    for input <- inputs do
+      case input do
+        %{"message" => m} ->
+          case Session.typed(m) do
+            "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
+            text -> text
+          end
+
+        %{"type" => "custom_message", "content" => content} ->
+          Session.text(content)
       end
     end
   end

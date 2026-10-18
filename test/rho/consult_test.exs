@@ -195,6 +195,72 @@ defmodule Rho.ConsultTest do
     assert Consult.describe(:stopped) =~ "stopped"
   end
 
+  test "a stopped consult leaves nothing in its caller's mailbox; the next one runs",
+       %{tmp_dir: dir} do
+    # the call streams a delta only after the stops are in the caller's mailbox
+    script = [[{:sleep, 150}, {:text, "late"}, :block], [{:text, "Second."}]]
+    %{loop: loop} = start_loop(dir, script)
+
+    task =
+      Task.async(fn ->
+        first = Consult.run(@gemini, "Review", loop: loop)
+        left = Process.info(self(), :messages)
+        {first, left, Consult.run(@gemini, "Again", loop: loop)}
+      end)
+
+    assert_receive {:llm_request, _request, _worker}, 2_000
+    :erlang.suspend_process(task.pid)
+    for _ <- 1..3, do: :ok = Loop.stop(loop)
+    Process.sleep(300)
+    :erlang.resume_process(task.pid)
+
+    assert {{:error, :stopped}, {:messages, []}, {:ok, %{text: "Second."}}} = Task.await(task)
+  end
+
+  test "a tool the consulted model runs dies with the consult's caller", %{tmp_dir: dir} do
+    sup = start_supervised!(Task.Supervisor, id: :consult_tools)
+    call = [{:tool_call, "t", "echo", %{"text" => "x", "sleep_ms" => 5_000}}]
+    {:ok, llm} = FakeLLM.start([call])
+
+    caller =
+      spawn(fn ->
+        Consult.run(@gemini, "q",
+          llm: {FakeLLM, llm},
+          tools: [Rho.Test.Tools.Echo],
+          task_supervisor: sup,
+          data_dir: dir
+        )
+      end)
+
+    assert [tool] = wait_until(fn -> Task.Supervisor.children(sup) end, &(&1 != []))
+    ref = Process.monitor(tool)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^tool, :killed}, 2_000
+  end
+
+  defp wait_until(fun, ok?, tries \\ 100) do
+    value = fun.()
+
+    cond do
+      ok?.(value) -> value
+      tries == 0 -> flunk("timed out; last: #{inspect(value)}")
+      true -> Process.sleep(20) && wait_until(fun, ok?, tries - 1)
+    end
+  end
+
+  test "a model message dropped at the iteration limit is named as not sent", %{tmp_dir: dir} do
+    script = [[{:tool_call, "c1", "echo", %{"text" => "x", "sleep_ms" => 200}}], [{:text, "S"}]]
+    %{loop: loop} = start_loop(dir, script, max_iterations: 1)
+    :ok = Loop.prompt(loop, "go")
+    assert_receive {:rho, _, %{type: :tool_execution_start}}, 2_000
+    :ok = Loop.steer(loop, "Point 1 is wrong.", attribution: {:model, @gemini, "critique"})
+    events = collect()
+
+    notices = for %{type: :message_end, entry: %{"type" => "custom_message"} = e} <- events, do: e
+    assert Enum.any?(notices, &(&1["content"] =~ "Not sent: Point 1 is wrong."))
+    refute Enum.any?(notices, &Session.attribution/1)
+  end
+
   test "the loop exiting stops a consult", %{tmp_dir: dir} do
     %{loop: loop} = start_loop(dir, [[:block]])
     task = Task.async(fn -> Consult.run(@gemini, "Review", loop: loop) end)

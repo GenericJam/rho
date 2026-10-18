@@ -293,10 +293,13 @@ defmodule Rho.Consult do
     end
 
     Process.demonitor(c.loop_ref, [:flush])
-    loop = c.loop
+    flush_stops(c.loop)
+  end
 
+  # Every stop that raced the end (a user may press Stop more than once).
+  defp flush_stops(loop) do
     receive do
-      {:rho_stop, ^loop} -> :ok
+      {:rho_stop, ^loop} -> flush_stops(loop)
     after
       0 -> :ok
     end
@@ -443,10 +446,13 @@ defmodule Rho.Consult do
   # The model call in a worker the caller owns: its deltas go to the loop,
   # a stop (or the loop's exit) kills it. The worker watches the caller and
   # kills the call if the caller goes first (a tool's task killed at its
-  # timeout), so no call outlives its consult.
+  # timeout), so no call outlives its consult. It answers through an alias
+  # the caller drops when it's done with the call, so a killed call's last
+  # deltas never reach a host process's mailbox afterwards.
   defp call(c, request) do
     {mod, llm_opts} = c.llm
     caller = self()
+    reply = Process.alias()
 
     {pid, ref} =
       spawn_monitor(fn ->
@@ -461,8 +467,8 @@ defmodule Rho.Consult do
               | messages: Session.fetch(request.messages, %{session_id: c.session_id})
             }
 
-            result = mod.stream(request, llm_opts, &send(caller, {:consult_llm, worker, &1}))
-            send(caller, {:consult_done, worker, result})
+            result = mod.stream(request, llm_opts, &send(reply, {:consult_llm, worker, &1}))
+            send(reply, {:consult_done, worker, result})
           end)
 
         receive do
@@ -472,7 +478,10 @@ defmodule Rho.Consult do
         end
       end)
 
-    await_call(c, pid, ref)
+    result = await_call(c, pid, ref)
+    Process.unalias(reply)
+    flush_call(pid)
+    result
   end
 
   defp await_call(c, pid, ref) do
@@ -501,9 +510,23 @@ defmodule Rho.Consult do
     end
   end
 
+  # What the call sent before its alias was dropped.
+  defp flush_call(pid) do
+    receive do
+      {:consult_llm, ^pid, _event} -> flush_call(pid)
+      {:consult_done, ^pid, _result} -> flush_call(pid)
+    after
+      0 -> :ok
+    end
+  end
+
+  # Killed, and gone (its DOWN received) before this returns.
   defp kill(pid, ref) do
-    Process.demonitor(ref, [:flush])
     Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, _, _} -> :ok
+    end
   end
 
   # ── tools ──
@@ -537,46 +560,70 @@ defmodule Rho.Consult do
         }
 
         task = ToolRunner.start(c.task_supervisor, self(), module, call, c.gate, ctx)
-        await_tool(c, call, task, module, nil)
+        watch(task.pid)
+        await_tool(c, call, task, module, :infinity)
     end
   end
 
-  defp await_tool(c, call, %Task{pid: tpid, ref: tref} = task, module, timer) do
+  # A tool task dies with the consult's caller, as its model call does.
+  defp watch(task_pid) do
+    caller = self()
+
+    spawn(fn ->
+      caller_ref = Process.monitor(caller)
+      task_ref = Process.monitor(task_pid)
+
+      receive do
+        {:DOWN, ^caller_ref, :process, _, _} -> Process.exit(task_pid, :kill)
+        {:DOWN, ^task_ref, :process, _, _} -> :ok
+      end
+    end)
+  end
+
+  # `deadline` (monotonic ms) is set once the gate lets the tool run; no
+  # timer, so nothing is left in the caller's mailbox after.
+  defp await_tool(c, call, %Task{pid: tpid, ref: tref} = task, module, deadline) do
     loop = c.loop
     loop_ref = c.loop_ref
 
     receive do
       {:tool_running, ^tpid} ->
-        timer = Process.send_after(self(), {:consult_tool_timeout, tref}, Tool.timeout_ms(module))
-        await_tool(c, call, task, module, timer)
+        deadline = System.monotonic_time(:millisecond) + Tool.timeout_ms(module)
+        await_tool(c, call, task, module, deadline)
 
       {^tref, result} ->
         Process.demonitor(tref, [:flush])
-        cancel(timer)
         tool_text(c, call, result)
 
       {:DOWN, ^tref, :process, _, reason} ->
-        cancel(timer)
         ToolRunner.crash_text(reason)
 
-      {:consult_tool_timeout, ^tref} ->
-        kill(tpid, tref)
-        ToolRunner.timeout_text(module)
-
       {:rho_stop, ^loop} ->
-        cancel(timer)
-        kill(tpid, tref)
+        kill_tool(task)
         :stopped
 
       {:DOWN, ^loop_ref, :process, _, _} ->
-        cancel(timer)
-        kill(tpid, tref)
+        kill_tool(task)
         :stopped
+    after
+      left(deadline) ->
+        kill_tool(task)
+        ToolRunner.timeout_text(module)
     end
   end
 
-  defp cancel(nil), do: :ok
-  defp cancel(timer), do: Process.cancel_timer(timer, async: false, info: false)
+  defp left(:infinity), do: :infinity
+  defp left(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp kill_tool(%Task{pid: tpid, ref: tref}) do
+    kill(tpid, tref)
+
+    receive do
+      {:tool_running, ^tpid} -> :ok
+    after
+      0 -> :ok
+    end
+  end
 
   # The text the consulted model reads (pictures aren't passed on), over
   # the output budget cut as the loop cuts it.
