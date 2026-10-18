@@ -217,6 +217,27 @@ defmodule Rho.ConsultTest do
     assert {{:error, :stopped}, {:messages, []}, {:ok, %{text: "Second."}}} = Task.await(task)
   end
 
+  test "a tool answer that raced the stop doesn't stay in the caller's mailbox",
+       %{tmp_dir: dir} do
+    call = [{:tool_call, "t", "echo", %{"text" => "x", "sleep_ms" => 300}}]
+    %{loop: loop} = start_loop(dir, [call])
+
+    task =
+      Task.async(fn ->
+        result = Consult.run(@gemini, "q", loop: loop, tools: [Rho.Test.Tools.Echo])
+        {result, Process.info(self(), :messages)}
+      end)
+
+    assert_receive {:llm_request, _request, _worker}, 2_000
+    Process.sleep(100)
+    :erlang.suspend_process(task.pid)
+    :ok = Loop.stop(loop)
+    Process.sleep(400)
+    :erlang.resume_process(task.pid)
+
+    assert {{:error, :stopped}, {:messages, []}} = Task.await(task)
+  end
+
   test "a tool the consulted model runs dies with the consult's caller", %{tmp_dir: dir} do
     sup = start_supervised!(Task.Supervisor, id: :consult_tools)
     call = [{:tool_call, "t", "echo", %{"text" => "x", "sleep_ms" => 5_000}}]

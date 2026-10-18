@@ -52,7 +52,7 @@ defmodule Rho.Events do
   host's own):
 
     * `%{type: :consult_start, id:, model:, purpose:, call_id:}`
-    * `%{type: :consult_delta, id:, model:, purpose:, kind: :text | :thinking, delta:}`
+    * `%{type: :consult_delta, id:, model:, purpose:, call_id:, kind: :text | :thinking, delta:}`
     * `%{type: :consult_end, id:, model:, purpose:, call_id:, status: :ok | :error | :stopped,
       text:, usage:, error: String.t() | nil, entry: entry | nil}`: `usage` is pi's,
       summed over its model calls; `entry` the session's record of it

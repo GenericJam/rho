@@ -79,6 +79,10 @@ defmodule Rho.Tools.ConsultTest do
              Enum.find(events, &(&1.type == :tool_execution_end))
 
     assert %{call_id: "c1", model: @gemini} = Enum.find(events, &(&1.type == :consult_start))
+
+    assert %{call_id: "c1", delta: "1. (high) 2+2 is 4."} =
+             Enum.find(events, &(&1.type == :consult_delta))
+
     assert %{call_id: "c1", status: :ok} = Enum.find(events, &(&1.type == :consult_end))
 
     # recorded in the session, between the call and its result; three calls in the totals

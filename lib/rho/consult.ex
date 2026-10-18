@@ -615,11 +615,17 @@ defmodule Rho.Consult do
   defp left(:infinity), do: :infinity
   defp left(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
+  # Gone, and whatever it sent before (its gate passing, an answer that
+  # raced the stop) dropped from the caller's mailbox.
   defp kill_tool(%Task{pid: tpid, ref: tref}) do
     kill(tpid, tref)
+    flush_tool(tpid, tref)
+  end
 
+  defp flush_tool(tpid, tref) do
     receive do
-      {:tool_running, ^tpid} -> :ok
+      {:tool_running, ^tpid} -> flush_tool(tpid, tref)
+      {^tref, _result} -> flush_tool(tpid, tref)
     after
       0 -> :ok
     end

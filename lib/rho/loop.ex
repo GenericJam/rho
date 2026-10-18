@@ -491,6 +491,7 @@ defmodule Rho.Loop do
           id: id,
           model: c.model,
           purpose: c.purpose,
+          call_id: c.call_id,
           kind: kind,
           delta: delta
         })
