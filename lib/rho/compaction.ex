@@ -247,15 +247,28 @@ defmodule Rho.Compaction do
 
     reported =
       case last_usage(later) do
-        nil ->
-          0
-
-        {usage, trailing} ->
-          pdfs = for e <- Enum.reverse(trailing), pages <- Enum.reverse(pdf_pages(e)), do: pages
-          context_size(usage) + Enum.sum_by(trailing, &body_tokens/1) + docs_tokens(pdfs)
+        nil -> 0
+        {usage, trailing} -> context_size(usage) + trailing_tokens(trailing, request)
       end
 
     max(reported, request_tokens(request))
+  end
+
+  # The entries after the last reported usage; their PDFs only when the
+  # request carries documents (the model takes them).
+  defp trailing_tokens(trailing, request) do
+    pdfs =
+      if documents?(request),
+        do: for(e <- Enum.reverse(trailing), p <- Enum.reverse(pdf_pages(e)), do: p),
+        else: []
+
+    Enum.sum_by(trailing, &body_tokens/1) + docs_tokens(pdfs)
+  end
+
+  defp documents?(request) do
+    Enum.any?(request.messages, fn m ->
+      Enum.any?(m.content, &match?(%ContentPart{type: :file}, &1))
+    end)
   end
 
   # ── where ──

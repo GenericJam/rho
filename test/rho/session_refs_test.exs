@@ -265,6 +265,26 @@ defmodule Rho.SessionRefsTest do
     assert resolved_refs() == []
   end
 
+  test "after a reported usage, a trailing PDF counts only for a model that takes PDFs" do
+    pdf = %{kind: :pdf, name: "r.pdf", mime: "application/pdf", about: "x", ref: "p", pages: 40}
+    reply = %{text: "ok", usage: %{input_tokens: 100_000}, stop_reason: "stop"}
+
+    entries = [
+      Session.user("hi"),
+      Session.assistant(reply, model()),
+      Session.user("read this", attachments: [pdf])
+    ]
+
+    tokens = fn inputs ->
+      messages = Session.messages(entries, inputs: inputs, fetch: false)
+      request = %{system_prompt: "", tools: [], messages: messages}
+      Rho.Compaction.context_tokens(entries, request)
+    end
+
+    assert tokens.([:text]) in 100_000..100_999
+    assert tokens.([:text, :pdf]) in 180_000..180_999
+  end
+
   test "a tool can't mix inline pictures and pictures by reference" do
     images = [{"image/png", <<1>>}, %{ref: "m-1", mime: "image/png"}]
 

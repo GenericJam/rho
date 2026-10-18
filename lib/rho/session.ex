@@ -842,18 +842,22 @@ defmodule Rho.Session do
 
   defp fill(%ContentPart{type: :file}, a, cache, budget, ctx) do
     case pdf_bytes(a, cache, budget, ctx) do
-      {{:ok, bytes}, cache} ->
-        case add_document(budget, byte_size(bytes), a["pages"]) do
-          {:ok, budget} ->
-            part = ContentPart.file(bytes, a["name"], "application/pdf", %{pages: a["pages"]})
-            {[part], cache, budget}
+      {{:ok, bytes}, cache} -> admit(a, bytes, cache, budget)
+      {{:skip, note}, cache} -> {[ContentPart.text(note)], cache, budget}
+    end
+  end
 
-          :full ->
-            {[ContentPart.text(not_this_time(a))], cache, budget}
-        end
+  defp admit(a, bytes, cache, budget) do
+    case add_document(budget, byte_size(bytes), a["pages"]) do
+      {:ok, budget} ->
+        part = ContentPart.file(bytes, a["name"], "application/pdf", %{pages: a["pages"]})
+        {[part], cache, budget}
 
-      {{:skip, note}, cache} ->
-        {[ContentPart.text(note)], cache, budget}
+      :full ->
+        # the budget only fills up from here: an older copy won't fit
+        # either, so don't keep the bytes
+        cache = if a["ref"], do: Map.put(cache, {"pdf", a["ref"]}, :full), else: cache
+        {[ContentPart.text(not_this_time(a))], cache, budget}
     end
   end
 
@@ -876,6 +880,7 @@ defmodule Rho.Session do
       is_binary(a["ref"]) ->
         case cached(a, cache, ctx) do
           {{:ok, {_mime, bytes}}, cache} -> {{:ok, bytes}, cache}
+          {:full, cache} -> {{:skip, not_this_time(a)}, cache}
           {:error, cache} -> {{:skip, unfetched(a)}, cache}
         end
 
@@ -912,7 +917,8 @@ defmodule Rho.Session do
   end
 
   # A file by reference from the host's hook, once per `{kind, ref}`:
-  # `{{:ok, {mime, bytes}} | :error, cache}`.
+  # `{{:ok, {mime, bytes}} | :error | :full, cache}` (`:full`: a PDF over
+  # the budget, its bytes dropped).
   defp cached(%{"kind" => kind, "ref" => ref} = a, cache, ctx) do
     case cache do
       %{{^kind, ^ref} => result} ->
