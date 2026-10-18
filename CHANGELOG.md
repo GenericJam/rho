@@ -10,17 +10,20 @@ All notable changes to rho are listed here. The format follows
 
 - **Model calls are priced.** req_llm prices a reply only when every
   conditional tariff of the model is settled by the caller's
-  `:pricing_context`, and llm_db's Claude prices (and gpt-5.6's) carry
-  batch, fast-mode and US-only-inference modifiers, so Claude calls came
-  back unpriced and rho counted $0: in `usage.json`, the sessions'
-  `usage.cost`, `Rho.Session.totals/1` and the daily cap (`Rho.Budget`),
-  which therefore never tripped. `Rho.LLM.ReqLLM` now passes what rho's
-  requests are (not batched, standard speed and tier, global inference,
-  Anthropic's 5-minute cache, Gemini's implicit cache). A subscription
-  call is priced at its API-key price, as the docs already said
-  (notional), so a loop's daily cap (`:budget`) now counts it too:
-  `Rho.Settings.File`'s default cap is $1.00 a day, which a session on a
-  subscription can reach in an hour. Upstream:
+  `:pricing_context`. llm_db's tariffs for Claude (every model as of
+  llm_db 2026.10), gpt-5.6 and later, and Gemini 3.x carry such
+  conditions (batch, fast mode, service tier, US-only inference or
+  regional processing, cache TTL or explicit-cache storage), so calls to
+  those models came back unpriced and rho counted $0: in `usage.json`,
+  the sessions' `usage.cost`, `Rho.Session.totals/1` and the daily cap
+  (`Rho.Budget`). Models with a flat tariff (gpt-5.5, Gemini 2.5) were
+  priced already. `Rho.LLM.ReqLLM` now passes what rho's requests are
+  (not batched, standard speed and tier, global inference, Anthropic's
+  5-minute cache, Gemini's implicit cache). A subscription call is priced
+  at its API-key price, as the docs already said (notional), so a loop's
+  daily cap (`:budget`) now counts Claude subscription calls, and Codex
+  calls on such models, too: `Rho.Settings.File`'s default cap is $1.00 a
+  day, which a session on a subscription can reach in an hour. Upstream:
   [req_llm#1121](https://github.com/agentjido/req_llm/issues/1121).
 - **Claude's uncached input tokens** were recorded as 0: `Rho.Session.usage/1`
   took the cache's tokens off req_llm's `input_tokens`, which for
