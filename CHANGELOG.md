@@ -6,6 +6,8 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
 ### Added
 
 - **Attachments by reference**: an attachment with `ref:` (the host's own
@@ -116,5 +118,6 @@ can share it.
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
 
-[Unreleased]: https://github.com/GenericJam/rho/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/GenericJam/rho/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GenericJam/rho/releases/tag/v0.1.0
