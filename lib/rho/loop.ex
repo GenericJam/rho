@@ -565,20 +565,17 @@ defmodule Rho.Loop do
 
   # The messages a turn at the limit doesn't send: the user's, and another
   # model's (`Rho.Session.model_message/4`).
-  defp dropped(inputs) do
-    for input <- inputs do
-      case input do
-        %{"message" => m} ->
-          case Session.typed(m) do
-            "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
-            text -> text
-          end
+  defp dropped(inputs), do: Enum.map(inputs, &dropped_text/1)
 
-        %{"type" => "custom_message", "content" => content} ->
-          Session.text(content)
-      end
+  defp dropped_text(%{"message" => m}) do
+    case Session.typed(m) do
+      "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
+      text -> text
     end
   end
+
+  defp dropped_text(%{"type" => "custom_message", "content" => content}),
+    do: Session.text(content)
 
   defp wrap_up(n, dropped) do
     "You've reached the limit of #{n} model calls for this run (max_iterations). Don't " <>
