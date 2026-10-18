@@ -50,7 +50,7 @@ defmodule Rho.Config do
       `{:ok, {mime_type, bytes}}`, ready for the model (any resizing is the
       host's), or `{:error, reason}`. It is called for referenced pictures
       when the model takes pictures and PDFs when it takes PDFs, once per
-      ref every time the loop makes a model call, in that call's process
+      kind and ref every time the loop makes a model call, in that call's process
       (`Rho.Session.fetch/2`), not the loop's, so a slow store doesn't
       hold up the loop; the call waits for it. Default: none, so a
       referenced file reaches the model as a note saying it couldn't be

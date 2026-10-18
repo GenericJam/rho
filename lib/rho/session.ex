@@ -557,7 +557,7 @@ defmodule Rho.Session do
   files whose bytes aren't in the session. A picture attached by reference
   comes from the host's `:resolve_attachment` hook
   (`Rho.Config.resolve_attachment/2`, given `ctx`, `%{session_id: id |
-  nil}`), once per ref; one it can't give becomes the note "(<name>
+  nil}`), once per kind and ref; one it can't give becomes the note "(<name>
   couldn't be loaded, so it isn't sent.)". PDFs (by path, read from it, or
   by reference, from the hook) go as documents the newest first while the
   request stays inside the provider's limits (20 MB, 100 pages); the

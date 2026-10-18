@@ -246,6 +246,25 @@ defmodule Rho.SessionRefsTest do
     assert resolved_refs() == ["p-1"]
   end
 
+  test "the token estimate counts unfetched documents as fetch/2 will admit them" do
+    pdf = fn ref, pages ->
+      %{kind: :pdf, name: ref, mime: "application/pdf", about: "x", ref: ref, pages: pages}
+    end
+
+    tokens = fn attachments ->
+      user = Session.user("", attachments: attachments)
+      messages = Session.messages([user], inputs: [:text, :pdf], fetch: false)
+      Rho.Compaction.request_tokens(%{system_prompt: "", tools: [], messages: messages})
+    end
+
+    # (the envelopes are a few dozen tokens; a page is 2,000)
+    # 101 pages never go: only the envelope counts
+    assert tokens.([pdf.("huge", 101)]) < 1_000
+    # the newer 60 pages go, the older 60 don't
+    assert tokens.([pdf.("old", 60), pdf.("new", 60)]) in 120_000..120_999
+    assert resolved_refs() == []
+  end
+
   test "a tool can't mix inline pictures and pictures by reference" do
     images = [{"image/png", <<1>>}, %{ref: "m-1", mime: "image/png"}]
 

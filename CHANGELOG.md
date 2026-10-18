@@ -15,7 +15,7 @@ All notable changes to rho are listed here. The format follows
   call fetches a referenced picture (when the model takes pictures) or PDF
   (when it takes PDFs) through the new `:resolve_attachment` hook
   (`fn attachment, ctx -> {:ok, {mime, bytes}} | {:error, reason} end` or
-  an MFA; `ctx` is `%{session_id: id}`), once per ref, in the call's own
+  an MFA; `ctx` is `%{session_id: id}`), once per kind and ref, in the call's own
   process, not the loop's, and sends it where an inline one would go; with
   no hook, an error, a raise or a bad answer the model gets "(<name>
   couldn't be loaded, so it isn't sent.)" instead. A tool can answer with
