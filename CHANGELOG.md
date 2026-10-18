@@ -6,6 +6,8 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-18
+
 ### Fixed
 
 - **Model calls are priced.** req_llm prices a reply only when every
@@ -183,7 +185,8 @@ can share it.
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
 
-[Unreleased]: https://github.com/GenericJam/rho/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/GenericJam/rho/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/GenericJam/rho/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GenericJam/rho/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GenericJam/rho/releases/tag/v0.1.0
