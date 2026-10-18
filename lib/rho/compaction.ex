@@ -359,7 +359,7 @@ defmodule Rho.Compaction do
     conversation =
       plan.entries
       |> Session.messages(fetch: false)
-      |> Enum.flat_map(&serialize/1)
+      |> Enum.flat_map(&serialize(&1, @tool_result_max_bytes))
       |> Enum.join("\n\n")
       |> escape_tags()
       |> clamp(summary_input_budget(window, max_tokens))
@@ -385,6 +385,33 @@ defmodule Rho.Compaction do
       max_tokens: max_tokens
     }
   end
+
+  @doc false
+  # `Rho.Consult`'s view of a conversation: `messages` serialized as the
+  # summary call's are (each tool result cut to `tool_result_max_bytes`),
+  # tags escaped, and over `budget` tokens the newest part kept (what is
+  # being consulted on is the latest turn).
+  @spec transcript([ReqLLM.Message.t()], pos_integer(), pos_integer()) :: String.t()
+  def transcript(messages, budget, tool_result_max_bytes) do
+    text =
+      messages
+      |> Enum.flat_map(&serialize(&1, tool_result_max_bytes))
+      |> Enum.join("\n\n")
+      |> escape_tags()
+
+    if estimate(text) <= budget, do: text, else: keep_tail(text, max(1_024, budget * 4))
+  end
+
+  defp keep_tail(text, max) when byte_size(text) <= max, do: text
+
+  defp keep_tail(text, max) do
+    tail = text |> binary_part(byte_size(text) - max, max) |> drop_continuation()
+    "[... #{byte_size(text) - byte_size(tail)} earlier characters cut]\n\n" <> tail
+  end
+
+  # A cut inside a UTF-8 character starts on its continuation bytes.
+  defp drop_continuation(<<0b10::2, _::6, rest::binary>>), do: drop_continuation(rest)
+  defp drop_continuation(text), do: text
 
   # ── errors ──
 
@@ -537,9 +564,9 @@ defmodule Rho.Compaction do
   defp num(n) when is_number(n), do: n
   defp num(_), do: 0
 
-  defp serialize(%Message{role: :user} = m), do: labeled("[User]", text(m))
+  defp serialize(%Message{role: :user} = m, _max), do: labeled("[User]", text(m))
 
-  defp serialize(%Message{role: :assistant} = m) do
+  defp serialize(%Message{role: :assistant} = m, _max) do
     calls =
       for %ToolCall{function: %{name: name, arguments: args}} <- m.tool_calls || [],
           do: "#{name}(#{call_args(args)})"
@@ -548,14 +575,14 @@ defmodule Rho.Compaction do
       if(calls == [], do: [], else: ["[Tool Call]: " <> Enum.join(calls, "; ")])
   end
 
-  defp serialize(%Message{role: :tool} = m) do
+  defp serialize(%Message{role: :tool} = m, max) do
     case text(m) do
       "" -> []
-      text -> ["[Tool Result]: " <> truncate(text, @tool_result_max_bytes)]
+      text -> ["[Tool Result]: " <> truncate(text, max)]
     end
   end
 
-  defp serialize(_message), do: []
+  defp serialize(_message, _max), do: []
 
   defp labeled(_label, ""), do: []
   defp labeled(label, text), do: ["#{label}: #{text}"]

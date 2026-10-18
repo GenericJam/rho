@@ -62,14 +62,23 @@ defmodule Rho.MixProject do
       extras: ["README.md", "CHANGELOG.md"],
       source_ref: "v#{@version}",
       groups_for_modules: [
-        "Loop & sessions": [Rho, Rho.Loop, Rho.Events, Rho.Session, Rho.Compaction, Rho.Artifacts],
+        "Loop & sessions": [
+          Rho,
+          Rho.Loop,
+          Rho.Events,
+          Rho.Session,
+          Rho.Compaction,
+          Rho.Artifacts,
+          Rho.Consult
+        ],
         Tools: [
           Rho.Tool,
           Rho.ToolRegistry,
           Rho.ToolRegistry.Source,
           Rho.ToolRunner,
           Rho.Tools.ReadArtifact,
-          Rho.Tools.Todo
+          Rho.Tools.Todo,
+          Rho.Tools.Consult
         ],
         "Models & usage": [
           Rho.LLM,

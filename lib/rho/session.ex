@@ -17,7 +17,12 @@ defmodule Rho.Session do
       `tool_result/5`)
     * `custom_message` (`customType` `"<ns>.notice"` / `"<ns>.error"` /
       `"<ns>.aside"`, `<ns>` being `Rho.Config.namespace/0`, `content`,
-      `display`) for loop notices
+      `display`) for loop notices, and `"<ns>.model_message"` for another
+      model's message injected into the conversation (`model_message/4`,
+      read back with `attribution/1`)
+    * `custom` (pi's extension entry, never sent to a model)
+      `"<ns>.consult"`: one consult's model, purpose and usage
+      (`consult/1`, `Rho.Consult`)
     * `compaction` (pi's `CompactionEntry`: `summary`, `firstKeptEntryId`,
       `tokensBefore`, `tokensAfter`, `method: "soft"`): the branch before
       `firstKeptEntryId`, summarized by the model (`Rho.Compaction`)
@@ -415,6 +420,87 @@ defmodule Rho.Session do
 
   def notice_kind(_entry), do: nil
 
+  @doc """
+  Another model's message, injected into the conversation (`Rho.Loop.prompt/3`
+  with `attribution: {:model, model, purpose}`): a `custom_message`
+  (`customType` `"<namespace>.model_message"`) whose `content` is that
+  model's text, as the chat shows it, and whose `details` say who wrote it
+  and why: `"model"` (a req_llm spec), `"purpose"` (`"critique"`,
+  `"second_opinion"` or free text) and, when given, `"instruction"`
+  (`opts[:instruction]`, what the lead model is asked to do with it; sent
+  to the model, not meant for the chat). `context/2` sends it as a user
+  message marked as that model's, never the user's. `attribution/1` reads
+  it back.
+  """
+  @spec model_message(String.t(), String.t(), String.t(), keyword()) :: entry()
+  def model_message(text, model, purpose, opts \\ [])
+      when is_binary(text) and is_binary(model) and is_binary(purpose) do
+    opts = Keyword.validate!(opts, instruction: nil)
+    details = %{"model" => model, "purpose" => purpose}
+
+    details =
+      case opts[:instruction] do
+        i when i in [nil, ""] -> details
+        i when is_binary(i) -> Map.put(details, "instruction", i)
+      end
+
+    %{
+      "type" => "custom_message",
+      "customType" => "#{Rho.Config.namespace()}.model_message",
+      "content" => text,
+      "display" => true,
+      "attribution" => "agent",
+      "details" => details
+    }
+  end
+
+  @doc """
+  Who wrote an injected model message (`model_message/4`, whatever
+  namespace wrote it): `%{model: spec, purpose: purpose}`; nil for any
+  other entry, the user's messages included.
+  """
+  @spec attribution(entry()) :: %{model: String.t(), purpose: String.t()} | nil
+  def attribution(%{"type" => "custom_message", "customType" => type} = entry)
+      when is_binary(type) do
+    with true <- custom_type?(type, "model_message"),
+         %{"model" => model, "purpose" => purpose} when is_binary(model) and is_binary(purpose) <-
+           entry["details"] do
+      %{model: model, purpose: purpose}
+    else
+      _ -> nil
+    end
+  end
+
+  def attribution(_entry), do: nil
+
+  @doc """
+  The record of one consult (`Rho.Consult.run/3` with a `:loop`): pi's
+  `custom` entry (`customType` `"<namespace>.consult"`, never sent to a
+  model), its `data` holding `"id"`, `"model"`, `"purpose"`, `"status"`
+  (`"ok"`, `"error"` or `"stopped"`), `"callId"` (the `ask_model` call it
+  answered, or nil) and `"usage"` (pi's, summed over its model calls),
+  which `totals/1` counts.
+  """
+  @spec consult(map()) :: entry()
+  def consult(%{id: id, model: model, purpose: purpose, status: status, usage: usage} = c)
+      when status in [:ok, :error, :stopped] do
+    %{
+      "type" => "custom",
+      "customType" => "#{Rho.Config.namespace()}.consult",
+      "data" => %{
+        "id" => id,
+        "model" => model,
+        "purpose" => purpose,
+        "status" => Atom.to_string(status),
+        "callId" => c[:call_id],
+        "usage" => usage
+      }
+    }
+  end
+
+  # `"<any namespace>.<kind>"`, as `notice_kind/1` reads them.
+  defp custom_type?(type, kind), do: type |> String.split(".") |> List.last() == kind
+
   @doc ~S|Records a model switch; `model` is a req_llm spec (`"anthropic:…"`).|
   @spec model_change(String.t()) :: entry()
   def model_change(model), do: %{"type" => "model_change", "model" => to_pi_model(model)}
@@ -719,14 +805,28 @@ defmodule Rho.Session do
     [Context.tool_result(m["toolCallId"], m["toolName"], content)]
   end
 
-  defp to_messages(%{"type" => "custom_message", "content" => content}, _ctx) do
-    case text(content) do
-      "" -> []
-      text -> [Context.user(text)]
+  defp to_messages(%{"type" => "custom_message", "content" => content} = entry, _ctx) do
+    case {text(content), attribution(entry)} do
+      {"", _} -> []
+      {text, nil} -> [Context.user(text)]
+      {text, by} -> [Context.user(from_model(text, by, entry["details"]["instruction"]))]
     end
   end
 
   defp to_messages(_entry, _ctx), do: []
+
+  # Another model's message, marked as that model's (not the user's); the
+  # lead's instruction, when there is one, after it.
+  defp from_model(text, %{model: model, purpose: purpose}, instruction) do
+    block =
+      ~s|<model_message model="#{attr(model)}" purpose="#{attr(purpose)}">\n| <>
+        "This is from another model (#{model}), not from the user.\n\n" <>
+        String.replace(text, "</model_message", "&lt;/model_message") <> "\n</model_message>"
+
+    if is_binary(instruction) and instruction != "",
+      do: block <> "\n\n" <> instruction,
+      else: block
+  end
 
   # A reply's text for the model; one that was only pictures says so (the
   # pictures stay out).
@@ -995,7 +1095,10 @@ defmodule Rho.Session do
     end
   end
 
-  @doc "Summed usage over a branch's assistant messages (pi `usage` shape)."
+  @doc """
+  Summed usage over a branch's assistant messages and consult records
+  (`consult/1`), pi `usage` shape.
+  """
   @spec totals([entry()]) :: %{
           tokens: non_neg_integer(),
           output: non_neg_integer(),
@@ -1005,6 +1108,10 @@ defmodule Rho.Session do
     Enum.reduce(entries, %{tokens: 0, output: 0, cost: 0.0}, fn
       %{"type" => "message", "message" => %{"role" => "assistant", "usage" => %{} = u}}, acc ->
         add_usage(acc, u)
+
+      %{"type" => "custom", "customType" => type, "data" => %{"usage" => %{} = u}}, acc
+      when is_binary(type) ->
+        if custom_type?(type, "consult"), do: add_usage(acc, u), else: acc
 
       _, acc ->
         acc

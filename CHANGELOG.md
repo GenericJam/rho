@@ -6,6 +6,42 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Consults** (`Rho.Consult`): `run(model, prompt, opts)` asks another
+  model (a `google:` Gemini model while Claude leads, say) and returns
+  `{:ok, %{text, model, purpose, usage}}`, or `{:error, reason}`
+  (`{:signed_out, provider}` without a credential, `:stopped`,
+  `{:cost_cap, spent, cap}`, the model call's error; `describe/1` words
+  it). Options: `:purpose` (`"critique"`, `"second_opinion"` or free
+  text), `:system`, `:attachments` (by ref or path), `:tools` the
+  consulted model may call (with `:max_iterations`), `:max_tokens`,
+  `:llm`, `:budget`. With `:loop` the consult is the session's:
+  `consult_start` / `consult_delta` / `consult_end` events to the loop's
+  subscribers, its usage recorded as a `custom` `"<ns>.consult"` entry
+  (`Rho.Session.consult/1`, counted by `Rho.Session.totals/1`) and
+  against the loop's daily cost cap, stopped by `Rho.Loop.stop/1` (even
+  when the loop is idle) or the loop exiting, and `:include_conversation`
+  sends the conversation so far as a transcript (the calls in flight left
+  out, the newest part when it's too long). The model call runs in a
+  worker that dies with its caller.
+- **`ask_model`** (`Rho.Tools.Consult`, not a built-in): the lead model
+  consults another (`model`, `purpose`, `prompt`, `include_conversation`)
+  and gets `"<model> (<purpose>):"` and its answer back, with `%{model,
+  purpose, usage}` as the result's details.
+- **Attributed messages**: `Rho.Loop.prompt/3`, `steer/3` and
+  `follow_up/3` take options as their third argument (`:attachments`,
+  `:attribution`, `:instruction`); `attribution: {:model, model,
+  purpose}` stores the text as that model's message, a `custom_message`
+  `"<ns>.model_message"` (`Rho.Session.model_message/4`, read back with
+  `Rho.Session.attribution/1`), sent to the lead marked as that model's,
+  not the user's, followed by the `:instruction`.
+- `config :rho, :consult_models` (the models that may be consulted; default
+  every catalog model of a signed-in provider; `Rho.Consult.models/0`,
+  `allowed/1`) and `:consult_system` (a consulted model's system prompt
+  per purpose).
+- `Rho.Loop.snapshot/1` lists the consults running (`consults`).
+
 ## [0.2.0] - 2026-10-18
 
 ### Added

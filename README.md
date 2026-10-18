@@ -25,6 +25,10 @@ sessions, context compaction, tools, and model sign-in, on
   (Codex) subscriptions through omp's OAuth PKCE flows, with refresh
   coordination and refresh-token rotation; or an API key for Anthropic,
   OpenAI or Gemini.
+- **Consult** (`Rho.Consult`, `Rho.Tools.Consult`): one model asks
+  another (Claude answers, Gemini pushes back): the `ask_model` tool for
+  the lead model, `Rho.Consult.run/3` for the host, and the answer handed
+  back as that model's own message in the session.
 - **Dyn** (`Rho.Dyn`, optional): tools and screens the agent writes,
   compiles and runs on the device, one approved generation at a time, on
   probation and reverted when they crash.
@@ -94,6 +98,39 @@ A subscription sign-in instead: `Rho.Auth.Login.begin(:anthropic)` opens
 the provider's page (the callback comes back to a listener on localhost),
 then `{:rho_login, :anthropic, :ok}` arrives.
 
+## One model consulting another
+
+The lead model asks another one through the `ask_model` tool
+(`Rho.Tools.Consult`; not a built-in, add it to the tools you offer), or
+the host consults one itself, e.g. for a critique after every reply, and
+hands the answer to the lead as that model's message:
+
+```elixir
+# config: which models may be consulted, and the brief each purpose gets
+config :rho,
+  consult_models: ["google:gemini-3.1-pro-preview", "openai:gpt-5"],
+  consult_system: %{"critique" => "Review this study answer: claims against the cited sources, ..."}
+
+{:ok, %{text: critique, usage: _usage}} =
+  Rho.Consult.run("google:gemini-3.1-pro-preview", "Review the last answer.",
+    loop: loop, purpose: "critique", include_conversation: true)
+
+:ok =
+  Rho.Loop.follow_up(loop, critique,
+    attribution: {:model, "google:gemini-3.1-pro-preview", "critique"},
+    instruction: "Respond to each point: revise where it's right, keep your answer where it isn't, with reasons."
+  )
+```
+
+With `loop:` the consult belongs to the session: its `consult_start` /
+`consult_delta` / `consult_end` events go to the loop's subscribers, its
+usage is recorded in the session (`Rho.Session.totals/1` counts it) and
+against the daily cost cap, and `Rho.Loop.stop/1` stops it. A provider
+without a key fails with `{:error, {:signed_out, provider}}`. The
+attributed message is stored as its own entry (`Rho.Session.attribution/1`
+says which model and purpose) and sent to the lead marked as that model's,
+never the user's.
+
 ## What a host provides
 
 Every coupling to the app around it is a behaviour or a `config :rho`
@@ -113,6 +150,8 @@ them all):
 | Attachments (`t:Rho.Session.attachment/0`: pictures, text, PDFs with a user message) | none: the host builds them from its pickers and camera | |
 | `:resolve_attachment` (`fn attachment, ctx -> {:ok, {mime, bytes}} \| {:error, reason} end` or an MFA): the bytes of a file attached by reference (`ref:` in an attachment, or a tool's `%{ref: …}` picture), whose session entry keeps only the ref and metadata | none: a referenced file reaches the model as a note | the app's materials store |
 | Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM` | |
+| `:consult_models` (a list of specs, or a function / MFA returning one): the models `Rho.Consult` and `ask_model` may consult | every catalog model of a signed-in provider | the app's settings |
+| `:consult_system` (`%{purpose => text}`, or a function / MFA given the purpose): a consulted model's system prompt | rho's for the purpose | the app's critic brief |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
 
 `Rho.Supervisor` also points llm_db at a model catalog trimmed to

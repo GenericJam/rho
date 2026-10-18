@@ -55,6 +55,17 @@ defmodule Rho.Config do
       hold up the loop; the call waits for it. Default: none, so a
       referenced file reaches the model as a note saying it couldn't be
       loaded.
+    * `:consult_models`: the models another model may be consulted on
+      (`Rho.Consult`, the `ask_model` tool): a list of req_llm specs, or a
+      0-arity function / MFA returning one, called each time it's read (so
+      it can follow the host's settings). `Rho.Consult.models/0` offers
+      the ones whose provider is signed in. Default: every catalog model
+      (`Rho.Models`) of a signed-in provider.
+    * `:consult_system`: the system prompt a consulted model gets
+      (`Rho.Consult.run/3` without `:system`, so the `ask_model` tool's
+      consults too), per purpose: a map `%{purpose => text}`, or a 1-arity
+      function / MFA called with the purpose last, returning the text or
+      nil. Default (and for nil): rho's own for the purpose.
     * `:dyn`: the Dyn layer (agent-written code, `Rho.Dyn`), off by
       default; its keys are `Rho.Dyn.Config`'s.
   """
@@ -131,6 +142,31 @@ defmodule Rho.Config do
     case Application.get_env(:rho, :resolve_attachment) do
       nil -> {:error, :no_resolver}
       hook -> resolve(hook, [attachment, ctx])
+    end
+  end
+
+  @doc """
+  The `:consult_models` allow-list, resolved; nil when the host sets none
+  (every signed-in catalog model is allowed, `Rho.Consult.models/0`).
+  """
+  @spec consult_models() :: [String.t()] | nil
+  def consult_models do
+    case Application.get_env(:rho, :consult_models) do
+      nil -> nil
+      value -> resolve(value, [])
+    end
+  end
+
+  @doc """
+  The host's system prompt for a consult with `purpose` (`:consult_system`),
+  or nil for rho's default.
+  """
+  @spec consult_system(String.t()) :: String.t() | nil
+  def consult_system(purpose) do
+    case Application.get_env(:rho, :consult_system) do
+      nil -> nil
+      %{} = by_purpose -> by_purpose[purpose]
+      hook -> resolve(hook, [purpose])
     end
   end
 

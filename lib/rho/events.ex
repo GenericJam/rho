@@ -44,6 +44,19 @@ defmodule Rho.Events do
       the compacted context. A failed summary ends the run instead, with an
       error notice (`message_start` / `message_end`) and `turn_end`
     * `%{type: :agent_end, reason: :done | :stopped | :error | :max_iterations | :cost_cap}`
+
+  A consult on the session (`Rho.Consult.run/3` with `:loop`, the
+  `ask_model` tool's included) has events of its own, outside the run's
+  lifecycle (one may run while the loop is idle); `id` tells concurrent
+  ones apart and `call_id` is the `ask_model` call it answers (nil for the
+  host's own):
+
+    * `%{type: :consult_start, id:, model:, purpose:, call_id:}`
+    * `%{type: :consult_delta, id:, model:, purpose:, kind: :text | :thinking, delta:}`
+    * `%{type: :consult_end, id:, model:, purpose:, call_id:, status: :ok | :error | :stopped,
+      text:, usage:, error: String.t() | nil, entry: entry | nil}`: `usage` is pi's,
+      summed over its model calls; `entry` the session's record of it
+      (`Rho.Session.consult/1`), nil when no model call came back
   """
 
   @type event :: %{required(:type) => atom(), optional(atom()) => term()}

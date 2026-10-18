@@ -10,14 +10,19 @@ defmodule Rho.Loop do
   `Rho.Tool.concurrency/1`), until the model stops calling tools
   and nothing is queued.
 
-    * `steer/2` while running queues a user message injected at the next
+    * `steer/3` while running queues a user message injected at the next
       step boundary: after the current tool batch, before the next model
       call (or, if the model just stopped, as one more turn).
-    * `follow_up/2` while running runs after the agent would stop.
+    * `follow_up/3` while running runs after the agent would stop.
     * `stop/1` kills the in-flight model call and skips tools not yet
       started; started tools finish, each sent `{:rho_stop, loop}`
       first, so one that waits on others (`task`'s subagents) can wrap up
-      early. The run ends with a notice entry.
+      early. The run ends with a notice entry. Consults on the session
+      (`Rho.Consult`) are sent `{:rho_stop, loop}` too, even when idle.
+
+  Another model's answer goes in as that model's message, not the
+  user's: `prompt/3`, `steer/3` or `follow_up/3` with `attribution:
+  {:model, model, purpose}` (`Rho.Session.model_message/4`).
 
   The slow parts never run in this process: the model call runs in a
   monitored worker, each tool in a task under `:task_supervisor`, so the
@@ -148,31 +153,73 @@ defmodule Rho.Loop do
 
   @doc """
   Starts a run. `{:error, :running}` if one is in progress (use `steer/3`).
-  `attachments` (`t:Rho.Session.attachment/0`) go with the message;
-  `text` may then be empty. One attached by reference (`:ref`) is stored
-  without its bytes and fetched through the `:resolve_attachment` hook
-  (`Rho.Config`) for each request. Raises `ArgumentError` for an
-  attachment with neither `:path` nor `:ref`.
+
+  The third argument is the message's attachments
+  (`t:Rho.Session.attachment/0`), or a keyword list of options:
+
+    * `:attachments`: as above; `text` may then be empty. One attached by
+      reference (`:ref`) is stored without its bytes and fetched through
+      the `:resolve_attachment` hook (`Rho.Config`) for each request.
+    * `:attribution`: `{:model, model, purpose}` makes `text` another
+      model's message (a consult's answer, `Rho.Consult`), not the
+      user's: stored as its own entry (`Rho.Session.model_message/4`,
+      read back with `Rho.Session.attribution/1`) and sent to the model
+      marked as that model's. No attachments with it.
+    * `:instruction`: with `:attribution`, what the model is asked to do
+      with that message ("Respond to each point: ..."), sent after it.
+
+  Raises `ArgumentError` for an attachment with neither `:path` nor
+  `:ref`, or an attribution with attachments or empty text.
   """
-  @spec prompt(GenServer.server(), String.t(), [Session.attachment()]) ::
+  @spec prompt(GenServer.server(), String.t(), [Session.attachment()] | keyword()) ::
           :ok | {:error, :running}
-  def prompt(loop, text, attachments \\ []) do
+  def prompt(loop, text, attachments_or_opts \\ []),
+    do: GenServer.call(loop, {:prompt, input!(text, attachments_or_opts)})
+
+  @doc """
+  Injects `text` at the next step boundary; starts a run if idle. The
+  third argument is `prompt/3`'s.
+  """
+  @spec steer(GenServer.server(), String.t(), [Session.attachment()] | keyword()) :: :ok
+  def steer(loop, text, attachments_or_opts \\ []),
+    do: GenServer.call(loop, {:steer, input!(text, attachments_or_opts)})
+
+  @doc """
+  Runs `text` once the agent would otherwise stop; starts a run if idle.
+  The third argument is `prompt/3`'s.
+  """
+  @spec follow_up(GenServer.server(), String.t(), [Session.attachment()] | keyword()) :: :ok
+  def follow_up(loop, text, attachments_or_opts \\ []),
+    do: GenServer.call(loop, {:follow_up, input!(text, attachments_or_opts)})
+
+  # `{text, attachments}`, or with options for the entry
+  # `{text, attachments, opts}` (`user/2`).
+  defp input!(text, list) do
+    {attachments, opts} =
+      if list != [] and Keyword.keyword?(list) do
+        opts = Keyword.validate!(list, attachments: [], attribution: nil, instruction: nil)
+        {opts[:attachments], opts}
+      else
+        {list, []}
+      end
+
     :ok = Session.check_attachments!(attachments)
-    GenServer.call(loop, {:prompt, {text, attachments}})
+    attributed!(text, attachments, opts[:attribution], opts[:instruction])
   end
 
-  @doc "Injects `text` at the next step boundary; starts a run if idle."
-  @spec steer(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
-  def steer(loop, text, attachments \\ []) do
-    :ok = Session.check_attachments!(attachments)
-    GenServer.call(loop, {:steer, {text, attachments}})
-  end
+  defp attributed!(text, attachments, nil, nil), do: {text, attachments}
 
-  @doc "Runs `text` once the agent would otherwise stop; starts a run if idle."
-  @spec follow_up(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
-  def follow_up(loop, text, attachments \\ []) do
-    :ok = Session.check_attachments!(attachments)
-    GenServer.call(loop, {:follow_up, {text, attachments}})
+  defp attributed!(_text, _attachments, nil, _instruction),
+    do: raise(ArgumentError, ":instruction goes with an :attribution")
+
+  defp attributed!(text, [], {:model, model, purpose} = by, instruction)
+       when is_binary(model) and is_binary(purpose) and text != "",
+       do: {text, [], [attribution: by, instruction: instruction]}
+
+  defp attributed!(_text, _attachments, attribution, _instruction) do
+    raise ArgumentError,
+          "an :attribution is {:model, model, purpose} (strings), with text and no " <>
+            "attachments; got #{inspect(attribution)}"
   end
 
   @doc """
@@ -185,7 +232,10 @@ defmodule Rho.Loop do
   def ask(loop, text, id, from),
     do: GenServer.call(loop, {:follow_up, {text, [], [ask: id, from: from]}})
 
-  @doc "Aborts the model call and unstarted tools; no-op when idle."
+  @doc """
+  Aborts the model call and unstarted tools (no-op when idle), and stops
+  every consult made on this loop (`Rho.Consult`), running or idle.
+  """
   @spec stop(GenServer.server()) :: :ok
   def stop(loop), do: GenServer.call(loop, :stop)
 
@@ -216,7 +266,9 @@ defmodule Rho.Loop do
 
   @doc """
   `%{session_id, path, title, model, status, entries, totals, streaming,
-  queue}`: what a screen needs to draw the session from scratch.
+  queue, consults}`: what a screen needs to draw the session from scratch.
+  `consults` are the ones running (`Rho.Consult`), `%{id, model, purpose,
+  call_id}` each.
   """
   @spec snapshot(GenServer.server()) :: map()
   def snapshot(loop), do: GenServer.call(loop, :snapshot)
@@ -254,7 +306,8 @@ defmodule Rho.Loop do
       steering: [],
       follow_up: [],
       notes: [],
-      run: nil
+      run: nil,
+      consults: %{}
     }
 
     {:ok, state}
@@ -278,7 +331,7 @@ defmodule Rho.Loop do
   def handle_call({:follow_up, input}, _from, s),
     do: {:reply, :ok, queued(%{s | follow_up: s.follow_up ++ [input]})}
 
-  def handle_call(:stop, _from, s), do: {:reply, :ok, do_stop(s)}
+  def handle_call(:stop, _from, s), do: {:reply, :ok, s |> stop_consults() |> do_stop()}
 
   def handle_call({:note, kind, text}, _from, %{status: :idle} = s),
     do: {:reply, :ok, notice(s, kind, text)}
@@ -321,7 +374,8 @@ defmodule Rho.Loop do
       entries: entries,
       totals: Session.totals(entries),
       streaming: s.run && s.run.stream && IO.iodata_to_binary(s.run.stream.text),
-      queue: %{steering: labels(s.steering), follow_up: labels(s.follow_up)}
+      queue: %{steering: labels(s.steering), follow_up: labels(s.follow_up)},
+      consults: for({_id, c} <- s.consults, do: Map.take(c, [:id, :model, :purpose, :call_id]))
     }
 
     {:reply, snapshot, s}
@@ -332,6 +386,34 @@ defmodule Rho.Loop do
 
   def handle_call(:config, _from, s),
     do: {:reply, %{session: s.session, opts: Map.to_list(s.opts)}, s}
+
+  # A consult (`Rho.Consult`) on this session: the caller is watched (and
+  # sent `{:rho_stop, loop}` on stop) until it ends.
+  def handle_call({:consult_start, info, include}, {pid, _tag}, s) do
+    c = Map.merge(info, %{pid: pid, ref: Process.monitor(pid)})
+    s = %{s | consults: Map.put(s.consults, info.id, c)}
+    emit(s, Map.merge(%{type: :consult_start}, Map.take(info, [:id, :model, :purpose, :call_id])))
+
+    joined = %{
+      loop: self(),
+      session: s.session,
+      opts: s.opts,
+      entries: if(include, do: Enum.reverse(s.entries_rev))
+    }
+
+    {:reply, {:ok, joined}, s}
+  end
+
+  def handle_call({:consult_end, id, ending}, _from, s) do
+    case Map.pop(s.consults, id) do
+      {nil, _} ->
+        {:reply, :ok, s}
+
+      {c, consults} ->
+        Process.demonitor(c.ref, [:flush])
+        {:reply, :ok, consult_ended(%{s | consults: consults}, c, ending)}
+    end
+  end
 
   # model stream worker
   @impl true
@@ -400,11 +482,45 @@ defmodule Rho.Loop do
     {:noreply, tool_done(s, ref, {:error, ToolRunner.timeout_text(module)})}
   end
 
-  # subscribers
+  # consults
+  def handle_info({:rho_consult_delta, pid, id, kind, delta}, s) do
+    case s.consults do
+      %{^id => %{pid: ^pid} = c} ->
+        emit(s, %{
+          type: :consult_delta,
+          id: id,
+          model: c.model,
+          purpose: c.purpose,
+          kind: kind,
+          delta: delta
+        })
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, s}
+  end
+
+  # a consult's caller that went without ending it, else a subscriber
   def handle_info({:DOWN, ref, :process, pid, _reason}, s) do
-    case s.subscribers do
-      %{^pid => ^ref} -> {:noreply, %{s | subscribers: Map.delete(s.subscribers, pid)}}
-      _ -> {:noreply, s}
+    case Enum.find(s.consults, fn {_id, c} -> c.ref == ref end) do
+      {id, c} ->
+        ending = %{
+          status: :error,
+          text: "",
+          error: "the consult's process exited",
+          usage: nil,
+          record: false
+        }
+
+        {:noreply, consult_ended(%{s | consults: Map.delete(s.consults, id)}, c, ending)}
+
+      nil ->
+        case s.subscribers do
+          %{^pid => ^ref} -> {:noreply, %{s | subscribers: Map.delete(s.subscribers, pid)}}
+          _ -> {:noreply, s}
+        end
     end
   end
 
@@ -825,8 +941,15 @@ defmodule Rho.Loop do
   defp user({text, attachments}, opts),
     do: Session.user(text, [attachments: attachments] ++ opts)
 
-  defp user({text, attachments, input_opts}, opts),
-    do: Session.user(text, [attachments: attachments] ++ input_opts ++ opts)
+  defp user({text, attachments, input_opts}, opts) do
+    case Keyword.pop(input_opts, :attribution) do
+      {{:model, model, purpose}, rest} ->
+        Session.model_message(text, model, purpose, instruction: rest[:instruction])
+
+      {nil, rest} ->
+        Session.user(text, [attachments: attachments] ++ rest ++ opts)
+    end
+  end
 
   # A queued message as the screen shows it: its text, else its files.
   defp labels(queue) do
@@ -1157,6 +1280,50 @@ defmodule Rho.Loop do
   end
 
   defp maybe_complete(s), do: s
+
+  # ── consults ──
+
+  # `Rho.Consult`s watch for this, as tools do (`{:rho_stop, loop}`).
+  defp stop_consults(s) do
+    for {_id, %{pid: pid}} <- s.consults, do: send(pid, {:rho_stop, self()})
+    s
+  end
+
+  # Its usage recorded in the session when a model call came back (a
+  # `custom` entry, never sent to the model, so it may land mid-turn).
+  defp consult_ended(s, c, ending) do
+    {s, entry} =
+      if ending.record do
+        record =
+          Session.consult(%{
+            id: c.id,
+            model: c.model,
+            purpose: c.purpose,
+            status: ending.status,
+            call_id: c.call_id,
+            usage: ending.usage
+          })
+
+        persist(s, record)
+      else
+        {s, nil}
+      end
+
+    emit(s, %{
+      type: :consult_end,
+      id: c.id,
+      model: c.model,
+      purpose: c.purpose,
+      call_id: c.call_id,
+      status: ending.status,
+      text: ending.text,
+      usage: ending.usage,
+      error: ending.error,
+      entry: entry
+    })
+
+    s
+  end
 
   # ── helpers ──
 
