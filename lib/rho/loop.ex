@@ -149,22 +149,31 @@ defmodule Rho.Loop do
   @doc """
   Starts a run. `{:error, :running}` if one is in progress (use `steer/3`).
   `attachments` (`t:Rho.Session.attachment/0`) go with the message;
-  `text` may then be empty.
+  `text` may then be empty. One attached by reference (`:ref`) is stored
+  without its bytes and fetched through the `:resolve_attachment` hook
+  (`Rho.Config`) for each request. Raises `ArgumentError` for an
+  attachment with neither `:path` nor `:ref`.
   """
   @spec prompt(GenServer.server(), String.t(), [Session.attachment()]) ::
           :ok | {:error, :running}
-  def prompt(loop, text, attachments \\ []),
-    do: GenServer.call(loop, {:prompt, {text, attachments}})
+  def prompt(loop, text, attachments \\ []) do
+    :ok = Session.check_attachments!(attachments)
+    GenServer.call(loop, {:prompt, {text, attachments}})
+  end
 
   @doc "Injects `text` at the next step boundary; starts a run if idle."
   @spec steer(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
-  def steer(loop, text, attachments \\ []),
-    do: GenServer.call(loop, {:steer, {text, attachments}})
+  def steer(loop, text, attachments \\ []) do
+    :ok = Session.check_attachments!(attachments)
+    GenServer.call(loop, {:steer, {text, attachments}})
+  end
 
   @doc "Runs `text` once the agent would otherwise stop; starts a run if idle."
   @spec follow_up(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
-  def follow_up(loop, text, attachments \\ []),
-    do: GenServer.call(loop, {:follow_up, {text, attachments}})
+  def follow_up(loop, text, attachments \\ []) do
+    :ok = Session.check_attachments!(attachments)
+    GenServer.call(loop, {:follow_up, {text, attachments}})
+  end
 
   @doc """
   A question from another agent (another node's, through the host's
@@ -559,7 +568,9 @@ defmodule Rho.Loop do
   end
 
   # What the model takes (pictures, PDFs); the `:inputs` option overrides it.
-  defp inputs(s), do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model)]
+  # The session id goes to the host's `:resolve_attachment` hook.
+  defp inputs(s),
+    do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model), session_id: s.session.id]
 
   # The tools the next call offers. The wrap-up at the limit keeps them: a
   # conversation holding tool calls must declare its tools (Anthropic rejects

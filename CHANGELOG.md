@@ -6,6 +6,29 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Attachments by reference**: an attachment with `ref:` (the host's own
+  id for the file, a material id say) is stored in the session as its ref
+  and metadata, never its bytes (no image part; the ref in the envelope and
+  in the message's `attachments`; `path` is then optional). Each time a
+  request is built, a referenced picture (when the model takes pictures) or
+  PDF (when it takes PDFs) is fetched through the new `:resolve_attachment`
+  hook (`fn attachment, ctx -> {:ok, {mime, bytes}} | {:error, reason} end`
+  or an MFA; `ctx` is `%{session_id: id}`) and goes to the model where an
+  inline one would; with no hook, an error, a raise or a bad answer the
+  model gets "(<name> couldn't be loaded, so it isn't sent.)" instead. A
+  tool can answer with a picture by reference, `%{ref:, mime:, name:}` in
+  its `:images`, stored as the tool result's `attachments`.
+  `Rho.Session.attachments/1` lists a user message's or tool result's files
+  (`kind`, `name`, `mimeType`, and `ref` / `path` / `about` / `pages`
+  when present) for the host's chat. Sessions with inline pictures are read
+  as before, and pictures the model makes stay inline.
+  `Rho.Session.messages/2` takes `session_id:` (for the hook) and
+  `fetch: false` (compaction's text-only summary uses it).
+- `Rho.Loop.prompt/3`, `steer/3` and `follow_up/3` raise `ArgumentError`
+  in the caller for an attachment with neither `:path` nor `:ref`.
+
 ## [0.1.0] - 2026-10-16
 
 The first release: the agent core taken out of

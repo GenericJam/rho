@@ -306,7 +306,7 @@ defmodule Rho.Compaction do
   def summary_request(plan, model, max_tokens, window) do
     conversation =
       plan.entries
-      |> Session.messages()
+      |> Session.messages(fetch: false)
       |> Enum.flat_map(&serialize/1)
       |> Enum.join("\n\n")
       |> escape_tags()
@@ -428,7 +428,10 @@ defmodule Rho.Compaction do
   end
 
   defp entry_tokens(%{"type" => "message", "message" => m}) do
-    pictures = for %{"type" => "image"} <- List.wrap(m["content"]), do: @image_tokens
+    # inline pictures are image parts; ones by reference are only attachments
+    pictures =
+      for(%{"type" => "image"} <- List.wrap(m["content"]), do: @image_tokens) ++
+        for(%{"kind" => "image", "ref" => _} <- Session.attachments(m), do: @image_tokens)
 
     pdfs =
       for %{"kind" => "pdf"} = a <- Session.attachments(m), do: (a["pages"] || 1) * @page_tokens
