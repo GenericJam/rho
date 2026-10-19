@@ -14,13 +14,16 @@ The ChatGPT sign-in's models are the ones it accepts.
 
 - **`Rho.Models.catalog(:openai_codex)`** is Codex's own list for the
   account (`GET /backend-api/codex/models`, in Codex's order, the first
-  its default), fetched and kept by the new **`Rho.Models.Codex`**: in
-  memory and in the data dir (`codex_models.json`), fetched again in the
-  background once 6 hours old (5 minutes after a failed try). Before the
+  its default), fetched and kept by the new **`Rho.Models.Codex`** per
+  sign-in (per data dir: a loop's `:data_dir` and `:credential`, else the
+  node's): in memory (an ETS table; `Rho.Supervisor` starts its owner) and
+  in the dir's `codex_models.json`, fetched again in the background once 6
+  hours old (5 minutes after a failed try, one fetch at a time). Before the
   first fetch it is the list shipped in `priv/models/openai_codex.json`,
   now Codex's of 2026-10-19 (gpt-5.5 and Daybreak Blue, which the
   backend refuses for a ChatGPT account, are gone). A picker should ask
-  each time it opens rather than keep the list.
+  each time it opens rather than keep the list. `catalog/2` takes the
+  sign-in (`:data_dir`, `:credential`).
 - **A session on a ChatGPT model the sign-in no longer accepts** moves to
   the sign-in's default for good (a `model_change` entry and a one-line
   notice) when a run starts on it, or when the backend refuses it; the
@@ -30,7 +33,7 @@ The ChatGPT sign-in's models are the ones it accepts.
 
 ### Added
 
-- `Rho.Models.resolve/1`: the model a saved spec runs as (a ChatGPT
+- `Rho.Models.resolve/2`: the model a saved spec runs as (a ChatGPT
   model the sign-in no longer accepts resolves to its default).
 - `config :rho, :codex_models_refresh` (default `true`): `false` turns
   the background fetch off.

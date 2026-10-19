@@ -56,10 +56,10 @@ defmodule Rho.Loop do
 
   A session on a ChatGPT model (`openai_codex:`) the sign-in no longer
   accepts moves to the sign-in's default for good, with a `model_change`
-  entry and a one-line notice: when a run starts and Codex's model list
-  (`Rho.Models.Codex`, fetched with the loop's `:credential`) doesn't have
-  it, or when the backend refuses it (the call is then made again on the
-  default, once per run).
+  entry and a one-line notice: when a run starts and the sign-in's model
+  list (`Rho.Models.Codex`, kept for the loop's `:data_dir`, fetched with
+  its `:credential`) doesn't have it, or when the backend refuses it (the
+  call is then made again on the default, once per run).
 
   Compaction (pi's; `Rho.Compaction`): before each model call, a
   context over the window (`:context_window`, default the model's) minus
@@ -780,14 +780,16 @@ defmodule Rho.Loop do
     end
   end
 
-  # A ChatGPT model the sign-in no longer accepts (Codex's list,
-  # `Rho.Models.Codex`) is replaced by the sign-in's default for good: a
-  # `model_change` entry and a one-line notice, when a run starts on it or
-  # when the backend refuses it (then the call is made again, once per run).
+  # A ChatGPT model the sign-in no longer accepts (its list, kept for the
+  # loop's `:data_dir`, `Rho.Models.Codex`) is replaced by the sign-in's
+  # default for good: a `model_change` entry and a one-line notice, when a
+  # run starts on it or when the backend refuses it (then the call is made
+  # again, once per run).
   defp accepted_model(%{session: %{model: "openai_codex:" <> _ = model}} = s) do
-    Codex.refresh_async(codex_opts(s))
+    opts = codex_opts(s)
+    Codex.refresh_async(opts)
 
-    case Codex.replacement(model) do
+    case Codex.replacement(model, opts) do
       nil -> s
       replacement -> replace_model(s, replacement)
     end
@@ -804,11 +806,12 @@ defmodule Rho.Loop do
 
   defp refused_replacement(_s, _error), do: nil
 
-  # Codex's list is fetched with the loop's own sign-in.
-  defp codex_opts(%{opts: %{llm: {_mod, llm_opts}}}) when is_list(llm_opts),
-    do: Keyword.take(llm_opts, [:credential])
+  # The list is the loop's sign-in's: its data dir, fetched with its
+  # `:credential`.
+  defp codex_opts(%{opts: %{llm: {_mod, llm_opts}}} = s) when is_list(llm_opts),
+    do: [data_dir: data_dir(s)] ++ Keyword.take(llm_opts, [:credential])
 
-  defp codex_opts(_s), do: []
+  defp codex_opts(s), do: [data_dir: data_dir(s)]
 
   defp replace_model(s, model) do
     from = s.session.model

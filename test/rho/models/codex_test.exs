@@ -36,22 +36,16 @@ defmodule Rho.Models.CodexTest do
 
   defp ok(body), do: Req.Response.new(status: 200, body: body)
 
-  defp fetched!(slugs) do
+  defp fetched!(slugs, dir) do
     body = listing(for {slug, i} <- Enum.with_index(slugs), do: entry(slug, i))
-    {:ok, _} = Codex.refresh(credential: &signed_in/1, respond: respond([ok(body)]))
+
+    {:ok, _} =
+      Codex.refresh(credential: &signed_in/1, respond: respond([ok(body)]), data_dir: dir)
   end
 
   setup do
-    file = Path.join(Rho.Config.data_dir(), "codex_models.json")
-    File.rm(file)
-    Codex.reset()
-
-    on_exit(fn ->
-      File.rm(file)
-      Codex.reset()
-    end)
-
-    %{kept_file: file}
+    start_supervised!(Codex)
+    :ok
   end
 
   describe "fetch/1" do
@@ -94,75 +88,104 @@ defmodule Rho.Models.CodexTest do
   end
 
   describe "the kept list" do
-    test "before any fetch: the shipped list, and no saved model is replaced" do
-      assert [%{id: "gpt-6.1-sol"} | _] = Codex.models()
-      refute Enum.any?(Codex.models(), &(&1.id == "gpt-5.5"))
-      assert Codex.replacement("openai_codex:gpt-5.5") == nil
-      assert Models.resolve("openai_codex:gpt-5.5") == "openai_codex:gpt-5.5"
+    test "before any fetch: the shipped list, and no saved model is replaced", %{tmp_dir: dir} do
+      assert [%{id: "gpt-6.1-sol"} | _] = Codex.models(data_dir: dir)
+      refute Enum.any?(Codex.models(data_dir: dir), &(&1.id == "gpt-5.5"))
+      assert Codex.replacement("openai_codex:gpt-5.5", data_dir: dir) == nil
+      assert Models.resolve("openai_codex:gpt-5.5", data_dir: dir) == "openai_codex:gpt-5.5"
     end
 
-    test "a fetched list is the catalog, and a saved model it lacks resolves to its first" do
-      fetched!(["gpt-7-sol", "gpt-6-luna"])
+    test "a fetched list is the catalog, and a saved model it lacks resolves to its first", %{
+      tmp_dir: dir
+    } do
+      fetched!(["gpt-7-sol", "gpt-6-luna"], dir)
 
-      assert Enum.map(Models.catalog(:openai_codex), & &1.spec) ==
+      assert Enum.map(Models.catalog(:openai_codex, data_dir: dir), & &1.spec) ==
                ["openai_codex:gpt-7-sol", "openai_codex:gpt-6-luna"]
 
-      assert Codex.default() == "gpt-7-sol"
-      assert Codex.replacement("openai_codex:gpt-5.5") == "openai_codex:gpt-7-sol"
-      assert Codex.replacement("openai_codex:gpt-6-luna") == nil
-      assert Codex.replacement("anthropic:claude-sonnet-4-5") == nil
-      assert Models.resolve("openai_codex:gpt-5.5") == "openai_codex:gpt-7-sol"
-      assert Models.resolve("anthropic:claude-sonnet-4-5") == "anthropic:claude-sonnet-4-5"
+      assert Codex.default(data_dir: dir) == "gpt-7-sol"
+      assert Codex.replacement("openai_codex:gpt-5.5", data_dir: dir) == "openai_codex:gpt-7-sol"
+      assert Codex.replacement("openai_codex:gpt-6-luna", data_dir: dir) == nil
+      assert Codex.replacement("anthropic:claude-sonnet-4-5", data_dir: dir) == nil
+      assert Models.resolve("openai_codex:gpt-5.5", data_dir: dir) == "openai_codex:gpt-7-sol"
+
+      assert Models.resolve("anthropic:claude-sonnet-4-5", data_dir: dir) ==
+               "anthropic:claude-sonnet-4-5"
     end
 
-    test "it survives a restart through the data dir's file", %{kept_file: file} do
-      fetched!(["gpt-7-sol"])
-      assert File.exists?(file)
+    test "each sign-in (data dir) has its own list", %{tmp_dir: dir} do
+      other = Path.join(dir, "other")
+      fetched!(["gpt-6-luna"], other)
+
+      assert Codex.replacement("openai_codex:gpt-6.1-sol", data_dir: other) ==
+               "openai_codex:gpt-6-luna"
+
+      assert Codex.replacement("openai_codex:gpt-6.1-sol", data_dir: dir) == nil
+      Codex.refused("openai_codex:gpt-6-astra", data_dir: other)
+      assert Codex.replacement("openai_codex:gpt-6-astra", data_dir: dir) == nil
+    end
+
+    test "it survives a restart through the data dir's file", %{tmp_dir: dir} do
+      fetched!(["gpt-7-sol"], dir)
+      assert File.exists?(Path.join(dir, "codex_models.json"))
 
       Codex.reset()
-      assert Codex.replacement("openai_codex:gpt-5.5") == "openai_codex:gpt-7-sol"
+      assert Codex.replacement("openai_codex:gpt-5.5", data_dir: dir) == "openai_codex:gpt-7-sol"
 
-      File.write!(file, "not json")
+      File.write!(Path.join(dir, "codex_models.json"), "not json")
       Codex.reset()
-      assert Codex.replacement("openai_codex:gpt-5.5") == nil
-      assert [%{id: "gpt-6.1-sol"} | _] = Codex.models()
+      assert Codex.replacement("openai_codex:gpt-5.5", data_dir: dir) == nil
+      assert [%{id: "gpt-6.1-sol"} | _] = Codex.models(data_dir: dir)
     end
 
-    test "a refused model leaves the list and the default takes over" do
-      fetched!(["gpt-5.5", "gpt-6-luna"])
+    test "a refused model leaves the list until the next fetch, and the default takes over", %{
+      tmp_dir: dir
+    } do
+      fetched!(["gpt-5.5", "gpt-6-luna"], dir)
 
-      assert Codex.refused("openai_codex:gpt-5.5") == "openai_codex:gpt-6-luna"
-      assert Enum.map(Codex.models(), & &1.id) == ["gpt-6-luna"]
-      assert Codex.replacement("openai_codex:gpt-5.5") == "openai_codex:gpt-6-luna"
+      assert Codex.refused("openai_codex:gpt-5.5", data_dir: dir) == "openai_codex:gpt-6-luna"
+      assert Enum.map(Codex.models(data_dir: dir), & &1.id) == ["gpt-6-luna"]
+      assert Codex.replacement("openai_codex:gpt-5.5", data_dir: dir) == "openai_codex:gpt-6-luna"
+
+      fetched!(["gpt-5.5", "gpt-6-luna"], dir)
+      assert Codex.replacement("openai_codex:gpt-5.5", data_dir: dir) == nil
     end
 
-    test "a model refused before any fetch: the shipped list without it" do
-      assert Codex.refused("openai_codex:gpt-6.1-sol") == "openai_codex:gpt-6-astra"
-      assert Codex.replacement("openai_codex:gpt-6.1-sol") == "openai_codex:gpt-6-astra"
+    test "a refusal before any fetch moves only the refused model", %{tmp_dir: dir} do
+      assert Codex.refused("openai_codex:gpt-6.1-sol", data_dir: dir) ==
+               "openai_codex:gpt-6-astra"
+
+      assert Codex.replacement("openai_codex:gpt-6.1-sol", data_dir: dir) ==
+               "openai_codex:gpt-6-astra"
+
+      # A model the shipped list doesn't name may still be accepted.
+      assert Codex.replacement("openai_codex:gpt-5.1-codex", data_dir: dir) == nil
     end
 
-    test "refresh_async fetches a stale list once, then not again while it is fresh" do
+    test "refresh_async fetches a stale list once, then not again while it is fresh", %{
+      tmp_dir: dir
+    } do
       Application.put_env(:rho, :codex_models_refresh, true)
       on_exit(fn -> Application.put_env(:rho, :codex_models_refresh, false) end)
 
       body = listing([entry("gpt-7-sol", 1)])
-      opts = [credential: &signed_in/1, respond: respond([ok(body)])]
+      opts = [credential: &signed_in/1, respond: respond([ok(body)]), data_dir: dir]
 
       :ok = Codex.refresh_async(opts)
+      # Asked again while the first fetch is under way: not fetched twice.
+      :ok = Codex.refresh_async(opts)
       assert_receive {:asked, :get, _, _}, 1_000
-      wait_until(fn -> Codex.default() == "gpt-7-sol" end)
+      wait_until(fn -> Codex.default(data_dir: dir) == "gpt-7-sol" end)
 
       :ok = Codex.refresh_async(opts)
       refute_receive {:asked, :get, _, _}, 100
     end
 
-    test "the notice names both models" do
-      fetched!(["gpt-7-sol"])
+    test "the notice names both models", %{tmp_dir: dir} do
+      fetched!(["gpt-7-sol"], dir)
 
       assert Codex.replaced_notice("openai_codex:gpt-5.5", "openai_codex:gpt-7-sol") ==
                "gpt-5.5 isn't offered on the ChatGPT sign-in any more; using gpt-7-sol instead."
-
-      Codex.reset()
 
       assert Codex.replaced_notice("openai_codex:gpt-6-luna", "openai_codex:gpt-6.1-sol") ==
                "GPT-6 Luna isn't offered on the ChatGPT sign-in any more; using GPT-6.1 Sol instead."
@@ -184,7 +207,7 @@ defmodule Rho.Models.CodexTest do
     test "a run starting on it moves the session to the default, with a notice", %{
       tmp_dir: dir
     } do
-      fetched!(["gpt-7-sol"])
+      fetched!(["gpt-7-sol"], dir)
       %{loop: loop, llm: llm} = codex_loop(dir, [[{:text, "ok"}]])
 
       :ok = Loop.prompt(loop, "hi")

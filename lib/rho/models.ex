@@ -39,22 +39,26 @@ defmodule Rho.Models do
 
   @doc """
   Every model of `provider` in the catalog, whether signed in or not.
-  ChatGPT's is `Rho.Models.Codex`'s current list, asked for again in the
-  background (with `Rho.Auth`'s sign-in) when it is stale, so a picker
-  should ask each time it opens rather than keep it.
+  ChatGPT's is the sign-in's current list (`Rho.Models.Codex`), asked for
+  again in the background when it is stale, so a picker should ask each
+  time it opens rather than keep it; `opts` (ChatGPT's only): whose list,
+  `:data_dir` and `:credential` (default the node's sign-in, `Rho.Auth`).
   """
-  @spec catalog(Auth.provider()) :: [model()]
-  def catalog(:anthropic) do
+  @spec catalog(Auth.provider(), keyword()) :: [model()]
+  def catalog(provider, opts \\ [])
+
+  def catalog(:anthropic, _opts) do
     :anthropic
     |> current()
     |> Enum.map(&model(:anthropic, &1))
     |> Enum.sort_by(&claude_order/1)
   end
 
-  def catalog(:openai_codex) do
-    Codex.refresh_async()
+  def catalog(:openai_codex, opts) do
+    opts = Keyword.take(opts, [:data_dir, :credential])
+    Codex.refresh_async(opts)
 
-    for m <- Codex.models(),
+    for m <- Codex.models(opts),
         do: %{
           provider: :openai_codex,
           spec: "openai_codex:" <> m.id,
@@ -63,7 +67,7 @@ defmodule Rho.Models do
         }
   end
 
-  def catalog(provider) when provider in [:openai, :google] do
+  def catalog(provider, _opts) when provider in [:openai, :google] do
     provider
     |> current()
     |> Enum.filter(&agentic?/1)
@@ -71,7 +75,7 @@ defmodule Rho.Models do
     |> Enum.map(&model(provider, &1))
   end
 
-  def catalog(_other), do: []
+  def catalog(_other, _opts), do: []
 
   defp current(provider),
     do: provider |> LLMDB.models() |> Enum.reject(&(&1.retired || &1.deprecated))
@@ -99,12 +103,12 @@ defmodule Rho.Models do
 
   @doc """
   The model a saved `spec` runs as: itself, or, for a ChatGPT model the
-  sign-in no longer accepts (`Rho.Models.Codex.replacement/1`), the
-  sign-in's default. A loop makes the same move when a run starts, with a
-  notice.
+  sign-in no longer accepts (`Rho.Models.Codex.replacement/2`, `opts` its
+  `:data_dir`), the sign-in's default. A loop makes the same move when a
+  run starts, with a notice.
   """
-  @spec resolve(String.t()) :: String.t()
-  def resolve(spec) when is_binary(spec), do: Codex.replacement(spec) || spec
+  @spec resolve(String.t(), keyword()) :: String.t()
+  def resolve(spec, opts \\ []) when is_binary(spec), do: Codex.replacement(spec, opts) || spec
 
   @doc """
   Whether two model specs name the same model, ignoring a dated snapshot

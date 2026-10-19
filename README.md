@@ -176,6 +176,7 @@ them all):
 | Whose sign-ins a loop uses: `llm: {Rho.LLM.ReqLLM, credential: fun, status: fun}` (as `Rho.Auth.credential/1` and `status/0` answer), read by its model calls, compaction, consults, `ask_model` and the fallback check | the node's (`Rho.Auth`) | |
 | `:consult_models` (a list of specs, or a function / MFA returning one): the models `Rho.Consult` and `ask_model` may consult | every catalog model of a signed-in provider | the app's settings |
 | `:consult_system` (`%{purpose => text}`, or a function / MFA given the purpose): a consulted model's system prompt | rho's for the purpose | the app's critic brief |
+| `:codex_models_refresh`: fetch each ChatGPT sign-in's model list from chatgpt.com in the background when it is stale (`Rho.Models.Codex`) | `true` | `true`; a host's tests set `false` |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
 
 `Rho.Supervisor` also points llm_db at a model catalog trimmed to
