@@ -10,9 +10,10 @@ defmodule Rho.Supervisor do
   Starts, in order: `Rho.Auth` (sign-ins, token refresh), `Rho.Auth.Login`
   (the OAuth browser flow), with Dyn the approval store
   (`Rho.Dyn.Approval.Biometric`) and `Rho.Dyn.Keeper`, then
-  `Rho.ToolRegistry`, `Rho.Usage`'s subscriber registry, the task
-  supervisor tools run under (`Rho.TaskSup`) and the loops' supervisor
-  (`Rho.LoopSup`, see `Rho.start_loop/1`).
+  `Rho.ToolRegistry`, `Rho.Usage`'s subscriber registry, the ChatGPT
+  sign-ins' kept model lists (`Rho.Models.Codex`), the task supervisor
+  tools run under (`Rho.TaskSup`) and the loops' supervisor (`Rho.LoopSup`,
+  see `Rho.start_loop/1`).
 
   Options:
 
@@ -52,6 +53,7 @@ defmodule Rho.Supervisor do
         [
           {Rho.ToolRegistry, registry_opts(opts, dyn)},
           Rho.Usage,
+          Rho.Models.Codex,
           {Task.Supervisor, name: Rho.TaskSup},
           {DynamicSupervisor, name: Rho.LoopSup, strategy: :one_for_one}
         ]

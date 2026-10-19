@@ -454,10 +454,10 @@ defmodule Rho.LLM.ReqLLM do
   @doc false
   @spec normalize(term()) :: Rho.LLM.error()
   def normalize(%ReqLLM.Error.API.Request{status: status} = e) when is_integer(status),
-    do: {:http, status, to_string(e.reason)}
+    do: {:http, status, http_message(e.reason, e.response_body)}
 
   def normalize(%ReqLLM.Error.API.Response{status: status} = e) when is_integer(status),
-    do: {:http, status, to_string(e.reason)}
+    do: {:http, status, http_message(e.reason, e.response_body)}
 
   # A failure mid-stream is raised as a Stream error wrapping the real one
   # (its message inspects the whole cause, response headers included).
@@ -474,4 +474,27 @@ defmodule Rho.LLM.ReqLLM do
   def normalize(:timeout), do: {:transport, :timeout}
   def normalize({:timeout, _} = reason), do: {:transport, reason}
   def normalize(other), do: {:other, inspect(other, limit: 20, printable_limit: 500)}
+
+  # req_llm's reason, or for a bare "HTTP 400" the provider's own message
+  # from the body (Codex's `detail`: "The 'gpt-5.5' model is not supported
+  # when using Codex with a ChatGPT account."), bounded.
+  defp http_message(reason, body) do
+    reason = to_string(reason)
+
+    case body_message(body) do
+      message when is_binary(message) and message != "" ->
+        if reason == "" or String.starts_with?(reason, "HTTP "),
+          do: String.slice(message, 0, 300),
+          else: reason
+
+      _ ->
+        reason
+    end
+  end
+
+  defp body_message(%{"error" => %{"message" => m}}), do: m
+  defp body_message(%{"error" => m}) when is_binary(m), do: m
+  defp body_message(%{"detail" => m}) when is_binary(m), do: m
+  defp body_message(%{"message" => m}) when is_binary(m), do: m
+  defp body_message(_body), do: nil
 end

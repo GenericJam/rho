@@ -27,6 +27,26 @@ defmodule Rho.LLMTest do
     refute text =~ "cookie"
   end
 
+  test "a bare HTTP 400 reads as the provider's own message from the body" do
+    detail = "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."
+
+    error =
+      Adapter.normalize(%ReqLLM.Error.API.Request{
+        status: 400,
+        reason: "HTTP 400",
+        response_body: %{"detail" => detail}
+      })
+
+    assert error == {:http, 400, detail}
+
+    assert Adapter.normalize(%ReqLLM.Error.API.Response{
+             status: 400,
+             reason: "HTTP 400",
+             response_body: nil
+           }) ==
+             {:http, 400, "HTTP 400"}
+  end
+
   test "a stream that stalls into a bare timeout is a transport error the loop retries" do
     assert Adapter.normalize(:timeout) == {:transport, :timeout}
     assert LLM.retryable?(Adapter.normalize(:timeout))

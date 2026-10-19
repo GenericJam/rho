@@ -54,6 +54,13 @@ defmodule Rho.Loop do
   when the run ends. Without one, the run ends with the error and what to
   do: when the limit lifts, or to prompt again to continue.
 
+  A session on a ChatGPT model (`openai_codex:`) the sign-in no longer
+  accepts moves to the sign-in's default for good, with a `model_change`
+  entry and a one-line notice: when a run starts and the sign-in's model
+  list (`Rho.Models.Codex`, kept for the loop's `:data_dir`, fetched with
+  its `:credential`) doesn't have it, or when the backend refuses it (the
+  call is then made again on the default, once per run).
+
   Compaction (pi's; `Rho.Compaction`): before each model call, a
   context over the window (`:context_window`, default the model's) minus
   the reserve (`:reserve_tokens`, default pi's) has its older part
@@ -98,6 +105,7 @@ defmodule Rho.Loop do
   alias Rho.Events
   alias Rho.LLM
   alias Rho.Models
+  alias Rho.Models.Codex
   alias Rho.Session
   alias Rho.Settings
   alias Rho.Tool
@@ -548,12 +556,13 @@ defmodule Rho.Loop do
           todo_reminded: false,
           wrap_up: false,
           stream: nil,
-          compaction: nil
+          compaction: nil,
+          model_replaced: false
         }
     }
 
     emit(s, %{type: :agent_start})
-    begin_turn(s, inputs)
+    s |> accepted_model() |> begin_turn(inputs)
   end
 
   # At the limit: one last call, with no tools, for a status; then the run
@@ -747,6 +756,19 @@ defmodule Rho.Loop do
   end
 
   defp handle_error(s, error) do
+    case refused_replacement(s, error) do
+      nil ->
+        compact_or_retry(s, error)
+
+      model ->
+        s
+        |> put_run(stream: nil, model_replaced: true, attempt: 1)
+        |> replace_model(model)
+        |> with_budget(&start_attempt/1)
+    end
+  end
+
+  defp compact_or_retry(s, error) do
     case overflow_plan(s, error) do
       {plan, tokens} ->
         s
@@ -756,6 +778,47 @@ defmodule Rho.Loop do
       nil ->
         retry_or_fail(s, error)
     end
+  end
+
+  # A ChatGPT model the sign-in no longer accepts (its list, kept for the
+  # loop's `:data_dir`, `Rho.Models.Codex`) is replaced by the sign-in's
+  # default for good: a `model_change` entry and a one-line notice, when a
+  # run starts on it or when the backend refuses it (then the call is made
+  # again, once per run).
+  defp accepted_model(%{session: %{model: "openai_codex:" <> _ = model}} = s) do
+    opts = codex_opts(s)
+    Codex.refresh_async(opts)
+
+    case Codex.replacement(model, opts) do
+      nil -> s
+      replacement -> replace_model(s, replacement)
+    end
+  end
+
+  defp accepted_model(s), do: s
+
+  defp refused_replacement(
+         %{run: %{model_replaced: false}, session: %{model: "openai_codex:" <> _ = model}} = s,
+         {:http, 400, message}
+       ) do
+    if Codex.refused?(message), do: Codex.refused(model, codex_opts(s))
+  end
+
+  defp refused_replacement(_s, _error), do: nil
+
+  # The list is the loop's sign-in's: its data dir, fetched with its
+  # `:credential`.
+  defp codex_opts(%{opts: %{llm: {_mod, llm_opts}}} = s) when is_list(llm_opts),
+    do: [data_dir: data_dir(s)] ++ Keyword.take(llm_opts, [:credential])
+
+  defp codex_opts(s), do: [data_dir: data_dir(s)]
+
+  defp replace_model(s, model) do
+    from = s.session.model
+    Logger.warning("[loop] #{from} isn't accepted by the ChatGPT sign-in; using #{model}")
+    {s, _} = persist(s, Session.model_change(model))
+    emit(s, %{type: :model_change, model: model})
+    notice(s, :notice, Codex.replaced_notice(from, model, codex_opts(s)))
   end
 
   # A call rejected as over the context window: compact and retry, once

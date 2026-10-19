@@ -20,7 +20,9 @@ sessions, context compaction, tools, and model sign-in, on
   output spilled to an artifact the agent pages through.
 - **Models** (`Rho.LLM`, `Rho.LLM.ReqLLM`, `Rho.Models`, `Rho.Usage`):
   Anthropic, OpenAI, OpenAI Codex and Google, with subscription usage
-  windows and per-model counters.
+  windows and per-model counters. The ChatGPT sign-in's models are the
+  ones Codex lists for the account (`Rho.Models.Codex`, fetched and kept);
+  a session on one it no longer accepts moves to its default with a notice.
 - **Auth** (`Rho.Auth`, `Rho.Auth.Login`): Claude Pro/Max and ChatGPT
   (Codex) subscriptions through omp's OAuth PKCE flows, with refresh
   coordination and refresh-token rotation; or an API key for Anthropic,
@@ -149,7 +151,7 @@ never the user's.
 It takes 20 to 60 seconds, so call it from a tool's task. Errors are
 `Rho.LLM.error/0`s (`Rho.LLM.describe/1`): `{:signed_out, :openai_codex}`,
 `{:rate_limited, limit}` with the used-up window's reset, and so on.
-`Rho.Images.models/1` lists the Codex models the account may use; the
+`Rho.Models.Codex` lists the Codex models the account may use; the
 ChatGPT account refuses others (gpt-5.5, gpt-image-2).
 
 ## What a host provides
@@ -174,6 +176,7 @@ them all):
 | Whose sign-ins a loop uses: `llm: {Rho.LLM.ReqLLM, credential: fun, status: fun}` (as `Rho.Auth.credential/1` and `status/0` answer), read by its model calls, compaction, consults, `ask_model` and the fallback check | the node's (`Rho.Auth`) | |
 | `:consult_models` (a list of specs, or a function / MFA returning one): the models `Rho.Consult` and `ask_model` may consult | every catalog model of a signed-in provider | the app's settings |
 | `:consult_system` (`%{purpose => text}`, or a function / MFA given the purpose): a consulted model's system prompt | rho's for the purpose | the app's critic brief |
+| `:codex_models_refresh`: fetch each ChatGPT sign-in's model list from chatgpt.com in the background when it is stale (`Rho.Models.Codex`) | `true` | `true`; a host's tests set `false` |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
 
 `Rho.Supervisor` also points llm_db at a model catalog trimmed to

@@ -23,4 +23,8 @@ Application.put_env(:rho, :dyn,
 # Model lookups (Rho.Models) go through rho's trimmed catalog, as on a device.
 Rho.LLMCatalog.install!()
 
+# No background fetch of ChatGPT's model list (Rho.Models.Codex): tests
+# don't touch the network; its tests fetch with a fake response.
+Application.put_env(:rho, :codex_models_refresh, false)
+
 ExUnit.start()

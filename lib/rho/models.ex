@@ -9,18 +9,14 @@ defmodule Rho.Models do
       deprecated ones left out. Claude: newest first within Opus, Sonnet,
       Haiku, then the rest. OpenAI and Gemini: the chat models that take
       tools, newest release first.
-    * ChatGPT (`openai_codex:`): the Codex backend serves its own set,
-      which llm_db doesn't list; `priv/models/openai_codex.json` is omp's
-      list (its source and version are in the file).
+    * ChatGPT (`openai_codex:`): the models the Codex backend accepts
+      for a ChatGPT account, which llm_db doesn't list: Codex's own list,
+      fetched and kept by `Rho.Models.Codex`, in Codex's order (the first
+      is the sign-in's default).
   """
 
   alias Rho.Auth
-
-  # Read at compile time and embedded: Application.app_dir/2 can't resolve
-  # priv/ on a phone.
-  @codex_file Path.expand("../../priv/models/openai_codex.json", __DIR__)
-  @external_resource @codex_file
-  @codex (@codex_file |> File.read!() |> Jason.decode!())["models"]
+  alias Rho.Models.Codex
 
   @type model :: %{
           provider: Auth.provider(),
@@ -41,26 +37,37 @@ defmodule Rho.Models do
     end
   end
 
-  @doc "Every model of `provider` in the catalog, whether signed in or not."
-  @spec catalog(Auth.provider()) :: [model()]
-  def catalog(:anthropic) do
+  @doc """
+  Every model of `provider` in the catalog, whether signed in or not.
+  ChatGPT's is the sign-in's current list (`Rho.Models.Codex`), asked for
+  again in the background when it is stale, so a picker should ask each
+  time it opens rather than keep it; `opts` (ChatGPT's only): whose list,
+  `:data_dir` and `:credential` (default the node's sign-in, `Rho.Auth`).
+  """
+  @spec catalog(Auth.provider(), keyword()) :: [model()]
+  def catalog(provider, opts \\ [])
+
+  def catalog(:anthropic, _opts) do
     :anthropic
     |> current()
     |> Enum.map(&model(:anthropic, &1))
     |> Enum.sort_by(&claude_order/1)
   end
 
-  def catalog(:openai_codex) do
-    for m <- @codex,
+  def catalog(:openai_codex, opts) do
+    opts = Keyword.take(opts, [:data_dir, :credential])
+    Codex.refresh_async(opts)
+
+    for m <- Codex.models(opts),
         do: %{
           provider: :openai_codex,
-          spec: "openai_codex:" <> m["id"],
-          name: m["name"],
-          context: m["context"]
+          spec: "openai_codex:" <> m.id,
+          name: m.name,
+          context: m.context
         }
   end
 
-  def catalog(provider) when provider in [:openai, :google] do
+  def catalog(provider, _opts) when provider in [:openai, :google] do
     provider
     |> current()
     |> Enum.filter(&agentic?/1)
@@ -68,7 +75,7 @@ defmodule Rho.Models do
     |> Enum.map(&model(provider, &1))
   end
 
-  def catalog(_other), do: []
+  def catalog(_other, _opts), do: []
 
   defp current(provider),
     do: provider |> LLMDB.models() |> Enum.reject(&(&1.retired || &1.deprecated))
@@ -93,6 +100,15 @@ defmodule Rho.Models do
       context: get_in(m, [Access.key(:limits), :context])
     }
   end
+
+  @doc """
+  The model a saved `spec` runs as: itself, or, for a ChatGPT model the
+  sign-in no longer accepts (`Rho.Models.Codex.replacement/2`, `opts` its
+  `:data_dir`), the sign-in's default. A loop makes the same move when a
+  run starts, with a notice.
+  """
+  @spec resolve(String.t(), keyword()) :: String.t()
+  def resolve(spec, opts \\ []) when is_binary(spec), do: Codex.replacement(spec, opts) || spec
 
   @doc """
   Whether two model specs name the same model, ignoring a dated snapshot
