@@ -155,16 +155,17 @@ defmodule Rho.ImagesTest do
       assert tool == %{"type" => "image_generation", "output_format" => "jpeg"}
     end
 
-    test "a model the account refuses: draws with the lightest one Codex lists", %{tmp_dir: dir} do
+    test "a model the account refuses: draws with Codex's default, the first it lists",
+         %{tmp_dir: dir} do
       refused =
         ~s({"detail":"The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."})
 
       models = %{
         "models" => [
-          %{"slug" => "gpt-big", "visibility" => "list", "priority" => 1},
-          %{"slug" => "codex-auto-review", "visibility" => "hide", "priority" => 43},
-          %{"slug" => "gpt-small", "visibility" => "list", "priority" => 9},
-          %{"slug" => "gpt-mid", "visibility" => "list", "priority" => 5}
+          %{"slug" => "gpt-mid", "visibility" => "list", "priority" => 5},
+          %{"slug" => "secret", "visibility" => "hide", "priority" => 0},
+          %{"slug" => "gpt-default", "visibility" => "list", "priority" => 1},
+          %{"slug" => "gpt-small", "visibility" => "list", "priority" => 9}
         ]
       }
 
@@ -175,7 +176,7 @@ defmodule Rho.ImagesTest do
           Req.Response.new(status: 200, body: sse([image_item(), @completed]))
         ])
 
-      assert {:ok, %{model: "gpt-small", bytes: @png}} =
+      assert {:ok, %{model: "gpt-default", bytes: @png}} =
                Images.generate("Draw.", opts(dir, respond, model: "gpt-5.5"))
 
       assert_received {:asked, :post, _, _, %{"model" => "gpt-5.5"}}
@@ -183,8 +184,8 @@ defmodule Rho.ImagesTest do
       assert_received {:asked, :get, %URI{path: "/backend-api/codex/models", query: query}, _,
                        nil}
 
-      assert URI.decode_query(query)["client_version"]
-      assert_received {:asked, :post, _, _, %{"model" => "gpt-small"}}
+      assert URI.decode_query(query)["client_version"] =~ ~r/^\d+\.\d+\.\d+$/
+      assert_received {:asked, :post, _, _, %{"model" => "gpt-default"}}
     end
 
     test "refused, and the list's model is the one refused: the 400 as it came", %{tmp_dir: dir} do
@@ -275,6 +276,74 @@ defmodule Rho.ImagesTest do
 
       assert {:error, {:http, 401, "Token expired"}} =
                Images.generate("Draw.", opts(dir, respond))
+    end
+  end
+
+  describe "generate/2 over a real connection" do
+    alias Rho.Test.SSEServer
+
+    defp live_opts(dir, url, extra \\ []),
+      do: [credential: &signed_in/1, base_url: url, data_dir: dir, now: @now] ++ extra
+
+    test "a stream in pieces: the picture, though a blank line and the base64 straddle chunks",
+         %{tmp_dir: dir} do
+      created = ~s(event: x\ndata: {"type":"response.created"}\n)
+      body = created <> "\n" <> sse([image_item(), @completed])
+
+      # Split right inside the first event's blank line, and inside the picture.
+      first = byte_size(created)
+      middle = first + 200
+
+      chunks = [
+        binary_part(body, 0, first),
+        {:sleep, 20},
+        binary_part(body, first, middle - first),
+        {:sleep, 20},
+        binary_part(body, middle, byte_size(body) - middle)
+      ]
+
+      url = SSEServer.start!([chunks])
+
+      assert {:ok, %{bytes: @png, mime: "image/png", action: "generate"}} =
+               Images.generate("Draw.", live_opts(dir, url))
+
+      assert_received {SSEServer, :request, "/responses"}
+
+      assert %{"requests" => 1, "errors" => 0, "input" => 2000} =
+               Usage.by_model(Usage.load(dir), :total)["openai_codex:gpt-5.6-luna"]
+    end
+
+    test "a failure's body through the stream: a usage limit", %{tmp_dir: dir} do
+      body =
+        ~s({"error":{"type":"usage_limit_reached","message":"limit","resets_at":#{@now + 60}}})
+
+      url = SSEServer.start!([{429, [body]}])
+
+      assert {:error, {:rate_limited, %{resets_at: reset, message: "limit"}}} =
+               Images.generate("Draw.", live_opts(dir, url))
+
+      assert reset == @now + 60
+    end
+
+    test "past :timeout, even while it streams: a transport timeout, recorded", %{tmp_dir: dir} do
+      tick = ~s(data: {"type":"response.in_progress"}\n\n)
+      url = SSEServer.start!([List.duplicate([tick, {:sleep, 50}], 40) |> List.flatten()])
+
+      assert {:error, {:transport, :timeout}} =
+               Images.generate("Draw.", live_opts(dir, url, timeout: 300))
+
+      assert %{"requests" => 1, "errors" => 1} =
+               Usage.by_model(Usage.load(dir), :total)["openai_codex:gpt-5.6-luna"]
+    end
+
+    test "a picture whose stream ends before response.completed: drawn, not an error",
+         %{tmp_dir: dir} do
+      url = SSEServer.start!([sse([image_item()])])
+
+      assert {:ok, %{bytes: @png, usage: nil}} = Images.generate("Draw.", live_opts(dir, url))
+
+      assert %{"requests" => 1, "errors" => 0} =
+               Usage.by_model(Usage.load(dir), :total)["openai_codex:gpt-5.6-luna"]
     end
   end
 
