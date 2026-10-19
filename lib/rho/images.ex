@@ -102,11 +102,25 @@ defmodule Rho.Images do
   """
   @spec generate(String.t(), keyword()) :: {:ok, picture()} | {:error, Rho.LLM.error()}
   def generate(prompt, opts \\ []) when is_binary(prompt) do
+    model = Keyword.get(opts, :model, @default_model)
+
+    # The sign-in (a refresh), the drawing and a refused model's second
+    # try, all within the one :timeout.
+    case within(Keyword.get(opts, :timeout, @timeout), fn -> run(model, prompt, opts) end) do
+      {:error, :timeout} ->
+        error = {:transport, :timeout}
+        record("openai_codex:" <> model, %{status: nil, headers: [], error: "timeout"}, opts)
+        {:error, error}
+
+      result ->
+        result
+    end
+  end
+
+  defp run(model, prompt, opts) do
     credential = Keyword.get(opts, :credential, &Auth.credential/1)
 
     with {:ok, auth} <- Adapter.credential(:openai_codex, credential) do
-      model = Keyword.get(opts, :model, @default_model)
-
       case draw(model, prompt, auth, opts) do
         {:error, {:refused_model, message}} -> fallback(model, message, prompt, auth, opts)
         result -> result
@@ -179,7 +193,6 @@ defmodule Rho.Images do
   defp draw(model, prompt, auth, opts) do
     format = opts |> Keyword.get(:format, "png") |> to_string()
     spec = "openai_codex:" <> model
-    timeout = Keyword.get(opts, :timeout, @timeout)
 
     req =
       request(opts,
@@ -187,11 +200,11 @@ defmodule Rho.Images do
         url: "/responses",
         headers: headers(auth, "text/event-stream"),
         json: body(model, prompt, format, opts),
-        receive_timeout: timeout,
+        receive_timeout: Keyword.get(opts, :timeout, @timeout),
         into: &collect/2
       )
 
-    case within(timeout, fn -> Req.request(req) end) do
+    case Req.request(req) do
       {:ok, %Req.Response{status: 200} = resp} ->
         stream_result(model, resp, opts)
 
@@ -205,8 +218,9 @@ defmodule Rho.Images do
     end
   end
 
-  # The whole drawing within `timeout` (a stream that keeps sending can't
-  # hold it longer): a timeout is the connection's, `{:transport, :timeout}`.
+  # `fun` within `timeout` (a stream that keeps sending can't hold it
+  # longer), in a task: `{:error, :timeout}` when it isn't done by then
+  # (killed: its connection closes with it).
   defp within(timeout, fun) do
     task =
       Task.async(fn ->
@@ -323,11 +337,13 @@ defmodule Rho.Images do
   end
 
   # Events end at a blank line, which may straddle two chunks (`last` is
-  # the previous chunk's last byte).
+  # the previous chunk's last byte). Carriage returns go first (SSE allows
+  # CRLF lines; JSON escapes a CR inside a string, so none is data).
   defp feed(%{halt: true} = state, _data), do: state
   defp feed(state, ""), do: state
 
   defp feed(state, data) do
+    data = :binary.replace(data, "\r", "", [:global])
     lead = byte_size(state.last)
 
     case :binary.match(state.last <> data, "\n\n") do
@@ -335,28 +351,40 @@ defmodule Rho.Images do
         cut = at - lead
         head = if cut > 0, do: binary_part(data, 0, cut), else: ""
         rest = binary_part(data, cut + 2, byte_size(data) - cut - 2)
-        block = IO.iodata_to_binary([state.pending, head])
-        state = event(%{state | pending: [], pending_size: 0, last: ""}, block)
-        feed(state, rest)
+
+        if state.pending_size + byte_size(head) > @max_event do
+          too_large(state)
+        else
+          block = IO.iodata_to_binary([state.pending, head])
+          state = event(%{state | pending: [], pending_size: 0, last: ""}, block)
+          feed(state, rest)
+        end
 
       :nomatch ->
         size = state.pending_size + byte_size(data)
 
-        if size > @max_event do
-          %{state | pending: [], pending_size: 0, halt: true, error: too_large()}
-        else
-          %{
+        cond do
+          size > @max_event ->
+            too_large(state)
+
+          data == "" ->
             state
-            | pending: [state.pending, data],
-              pending_size: size,
-              last: binary_part(data, byte_size(data) - 1, 1)
-          }
+
+          true ->
+            %{
+              state
+              | pending: [state.pending, data],
+                pending_size: size,
+                last: binary_part(data, byte_size(data) - 1, 1)
+            }
         end
     end
   end
 
-  defp too_large,
-    do: "the drawing's stream sent an event over #{div(@max_event, 1024 * 1024)} MB"
+  defp too_large(state) do
+    error = "the drawing's stream sent an event over #{div(@max_event, 1024 * 1024)} MB"
+    %{state | pending: [], pending_size: 0, last: "", halt: true, error: state.error || error}
+  end
 
   defp event(state, block) do
     data =
@@ -379,7 +407,8 @@ defmodule Rho.Images do
 
   defp apply_event(state, %{"type" => "response.output_text.delta", "delta" => delta})
        when is_binary(delta) do
-    if byte_size(state.text) < @max_text, do: %{state | text: state.text <> delta}, else: state
+    room = @max_text - String.length(state.text)
+    if room > 0, do: %{state | text: state.text <> String.slice(delta, 0, room)}, else: state
   end
 
   defp apply_event(state, %{"type" => "response.completed", "response" => %{"usage" => %{} = u}}),

@@ -336,6 +336,31 @@ defmodule Rho.ImagesTest do
                Usage.by_model(Usage.load(dir), :total)["openai_codex:gpt-5.6-luna"]
     end
 
+    test "CRLF lines, the blank line split between chunks", %{tmp_dir: dir} do
+      body = sse([%{"type" => "response.created"}, image_item(), @completed])
+      body = String.replace(body, "\n", "\r\n")
+      # Inside the first event's "\r\n\r\n".
+      [first, _] = :binary.split(body, "\r\n\r\n")
+      cut = byte_size(first) + 3
+
+      url =
+        SSEServer.start!([
+          [binary_part(body, 0, cut), {:sleep, 20}, binary_part(body, cut, byte_size(body) - cut)]
+        ])
+
+      assert {:ok, %{bytes: @png}} = Images.generate("Draw.", live_opts(dir, url))
+    end
+
+    test "what the model said instead of drawing is kept short", %{tmp_dir: dir} do
+      said = [%{"type" => "response.output_text.delta", "delta" => String.duplicate("é", 50_000)}]
+      url = SSEServer.start!([sse(said)])
+
+      assert {:error, {:other, "the model answered without a picture: " <> text}} =
+               Images.generate("Draw.", live_opts(dir, url))
+
+      assert String.length(text) == 300
+    end
+
     test "a picture whose stream ends before response.completed: drawn, not an error",
          %{tmp_dir: dir} do
       url = SSEServer.start!([sse([image_item()])])
