@@ -818,7 +818,7 @@ defmodule Rho.Loop do
     Logger.warning("[loop] #{from} isn't accepted by the ChatGPT sign-in; using #{model}")
     {s, _} = persist(s, Session.model_change(model))
     emit(s, %{type: :model_change, model: model})
-    notice(s, :notice, Codex.replaced_notice(from, model))
+    notice(s, :notice, Codex.replaced_notice(from, model, codex_opts(s)))
   end
 
   # A call rejected as over the context window: compact and retry, once

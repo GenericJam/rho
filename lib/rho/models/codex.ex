@@ -122,14 +122,19 @@ defmodule Rho.Models.Codex do
 
   @doc """
   The one-line notice for a conversation moved from `from` to `to` (specs)
-  because the sign-in no longer accepts `from`.
+  because the sign-in no longer accepts `from`; the models' names from the
+  sign-in's list (`opts`: `:data_dir`), else the shipped one, else their ids.
   """
-  @spec replaced_notice(String.t(), String.t()) :: String.t()
-  def replaced_notice(from, to),
-    do: "#{name(from)} isn't offered on the ChatGPT sign-in any more; using #{name(to)} instead."
+  @spec replaced_notice(String.t(), String.t(), keyword()) :: String.t()
+  def replaced_notice(from, to, opts \\ []) do
+    known = models(opts) ++ @shipped
 
-  defp name("openai_codex:" <> id) do
-    case Enum.find(models() ++ @shipped, &(&1.id == id)) do
+    "#{name(from, known)} isn't offered on the ChatGPT sign-in any more; " <>
+      "using #{name(to, known)} instead."
+  end
+
+  defp name("openai_codex:" <> id, known) do
+    case Enum.find(known, &(&1.id == id)) do
       %{name: name} -> name
       nil -> id
     end
@@ -159,7 +164,12 @@ defmodule Rho.Models.Codex do
     end
 
     refresh_async(opts)
-    default_spec(opts)
+
+    # Not `id` itself, even when nothing could be remembered (no table).
+    case Enum.find(models(opts), &(&1.id != id)) do
+      %{id: default} -> "openai_codex:" <> default
+      nil -> nil
+    end
   end
 
   defp default_spec(opts) do
