@@ -157,11 +157,12 @@ defmodule Rho.Consult do
   @doc """
   The models that may be consulted now: the host's `:consult_models`
   (`Rho.Config`), else every catalog model (`Rho.Models`), whose provider
-  is signed in.
+  is signed in according to `status` (`fn -> status end`, default
+  `Rho.Auth.status/0`; a loop's is `Rho.LLM.status/1` of its `:llm`).
   """
-  @spec models() :: [String.t()]
-  def models do
-    status = Auth.status()
+  @spec models((-> Auth.status())) :: [String.t()]
+  def models(status \\ &Auth.status/0) do
+    status = status.()
 
     case Rho.Config.consult_models() do
       nil -> for {_provider, true, models} <- Models.by_provider(status), m <- models, do: m.spec
@@ -171,27 +172,29 @@ defmodule Rho.Consult do
 
   @doc """
   Whether `model` may be consulted: on the host's `:consult_models` list
-  (by default, in the catalog) and its provider signed in. `:ok`, or
-  `{:error, why}` naming the models that may be.
+  (by default, in the catalog) and its provider signed in according to
+  `status` (as in `models/1`). `:ok`, or `{:error, why}` naming the models
+  that may be.
   """
-  @spec allowed(String.t()) :: :ok | {:error, String.t()}
-  def allowed(model) when is_binary(model) do
+  @spec allowed(String.t(), (-> Auth.status())) :: :ok | {:error, String.t()}
+  def allowed(model, status \\ &Auth.status/0) when is_binary(model) do
     case Auth.provider_for_model(model) do
       {:ok, provider} ->
         cond do
           not listed?(model, provider) ->
-            {:error, "#{model} isn't one of the models you may consult#{choices()}"}
+            {:error, "#{model} isn't one of the models you may consult#{choices(status)}"}
 
-          not Auth.signed_in?(provider) ->
+          not match?(%{signed_in: true}, status.()[provider]) ->
             {:error,
-             "#{Auth.label(provider)} isn't signed in, so #{model} can't be consulted#{choices()}"}
+             "#{Auth.label(provider)} isn't signed in, so #{model} can't be consulted" <>
+               choices(status)}
 
           true ->
             :ok
         end
 
       :error ->
-        {:error, "#{model} isn't a model rho can call#{choices()}"}
+        {:error, "#{model} isn't a model rho can call#{choices(status)}"}
     end
   end
 
@@ -209,8 +212,8 @@ defmodule Rho.Consult do
     end
   end
 
-  defp choices do
-    case models() do
+  defp choices(status) do
+    case models(status) do
       [] -> " (none is available: sign in to a provider #{Rho.Config.hint(:sign_in)})"
       models -> " (available: #{Enum.join(models, ", ")})"
     end
@@ -410,6 +413,7 @@ defmodule Rho.Consult do
       max_tokens: c.max_tokens
     }
 
+    request = Map.put(request, :data_dir, c.data_dir)
     if c.session_id, do: Map.put(request, :session_id, c.session_id), else: request
   end
 

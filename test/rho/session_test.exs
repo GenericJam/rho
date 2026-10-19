@@ -438,4 +438,87 @@ defmodule Rho.SessionTest do
     assert path_b == b.path
     assert Session.latest(dir) == b.path
   end
+
+  describe "keeping a copy in step by bytes" do
+    test "a copy kept in step from its size, in chunks, reads back the same", %{tmp_dir: dir} do
+      s = Session.new(Path.join(dir, "phone"), model(), dir)
+      {s, _} = Session.append(s, Session.user("first"))
+      copy = Path.join([dir, "server", Path.basename(s.path)])
+
+      # what a link does: the bytes past the copy's size, in 64-byte chunks
+      # (one may end mid-line), joined, then appended at that size
+      sync = fn ->
+        {:ok, from} = with({:error, :enoent} <- Session.size(copy), do: {:ok, 0})
+        {:ok, to} = Session.size(s.path)
+
+        bytes =
+          Stream.unfold(from, fn
+            ^to ->
+              nil
+
+            at ->
+              with {:ok, chunk} <- Session.read_from(s.path, at, max_bytes: 64),
+                   do: {chunk, at + byte_size(chunk)}
+          end)
+          |> Enum.join()
+
+        Session.append_bytes(copy, from, bytes)
+      end
+
+      assert {:ok, n} = sync.()
+      {_s, _} = Session.append(s, Session.user("second"))
+      assert {:ok, m} = sync.()
+      assert m > n
+      assert File.read!(copy) == File.read!(s.path)
+      {:ok, _, entries} = Session.open(copy, model())
+      assert List.last(entries)["message"]["content"] == [%{"type" => "text", "text" => "second"}]
+    end
+
+    test "size counts whole lines only; read_from stops there", %{tmp_dir: dir} do
+      path = Path.join(dir, "s.jsonl")
+      File.write!(path, "{\"a\":1}\n{\"b\":2}\n{\"torn")
+
+      assert Session.size(path) == {:ok, 16}
+      assert Session.read_from(path, 8) == {:ok, "{\"b\":2}\n"}
+      assert Session.read_from(path, 16) == {:ok, ""}
+      assert Session.read_from(path, 17) == {:error, :past_end}
+      assert Session.read_from(path, 0, max_bytes: 3) == {:ok, "{\"a"}
+      assert Session.size(Path.join(dir, "none.jsonl")) == {:error, :enoent}
+
+      # a line longer than one scan chunk
+      long = String.duplicate("x", 70_000)
+      File.write!(path, "#{long}\n#{long}")
+      assert Session.size(path) == {:ok, 70_001}
+    end
+
+    test "append_bytes: idempotent on a resend, refuses a diverged copy, drops a torn line",
+         %{tmp_dir: dir} do
+      path = Path.join([dir, "new", "s.jsonl"])
+      a = "{\"a\":1}\n"
+      b = "{\"b\":2}\n"
+
+      assert Session.append_bytes(path, 0, a) == {:ok, 8}
+      assert Session.append_bytes(path, 8, b) == {:ok, 16}
+      # the ack was lost and the same bytes come again
+      assert Session.append_bytes(path, 8, b) == {:ok, 16}
+      assert File.read!(path) == a <> b
+
+      # different bytes where these were: the copies diverged
+      assert Session.append_bytes(path, 8, "{\"c\":3}\n") == {:error, {:conflict, 16}}
+      assert Session.append_bytes(path, 4, b) == {:error, {:conflict, 16}}
+      assert Session.append_bytes(path, 16, "{\"c\":") == {:error, :partial_line}
+
+      File.write!(path, "{\"torn", [:append])
+      assert Session.append_bytes(path, 16, "{\"c\":3}\n") == {:ok, 24}
+      assert File.read!(path) == a <> b <> "{\"c\":3}\n"
+
+      # a resend that has grown since (the ack was lost, then more came): the rest is written
+      d = "{\"d\":4}\n"
+      assert Session.append_bytes(path, 16, "{\"c\":3}\n" <> d) == {:ok, 32}
+      assert File.read!(path) == a <> b <> "{\"c\":3}\n" <> d
+      assert Session.append_bytes(path, 16, "{\"x\":0}\n" <> d) == {:error, {:conflict, 32}}
+
+      assert Session.append_bytes(Path.join(dir, "missing.jsonl"), 8, a) == {:error, :enoent}
+    end
+  end
 end

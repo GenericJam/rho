@@ -4,9 +4,11 @@ defmodule Rho.LLMCostTest do
   use ExUnit.Case, async: false
 
   alias Rho.Auth
+  alias Rho.Auth.Vault
   alias Rho.LLM.ReqLLM, as: Adapter
   alias Rho.Session
   alias Rho.Test.SSEServer
+  alias Rho.Usage
 
   @moduletag :capture_log
 
@@ -209,5 +211,42 @@ defmodule Rho.LLMCostTest do
     expected = list_price("openai:gpt-5.5", tokens)
     assert expected["total"] > 0
     assert_cost(usage, expected)
+  end
+
+  @tag :tmp_dir
+  test "an account's call: the :credential option's key, recorded in the request's data dir",
+       %{tmp_dir: dir} do
+    # the node has no sign-in; the account (a vault) has a key
+    model = "anthropic:claude-opus-5-5"
+    vault = start_supervised!(Vault)
+    :ok = Vault.put_api_key(vault, :anthropic, "sk-ant-account")
+    serve(:anthropic, @claude_sse)
+    test = self()
+
+    credential = fn provider ->
+      send(test, {:credential, provider})
+      Vault.credential(vault, provider)
+    end
+
+    request = %{
+      model: model,
+      system_prompt: "Be brief.",
+      messages: [ReqLLM.Context.user("Say hi.")],
+      tools: [],
+      max_tokens: 64,
+      data_dir: dir
+    }
+
+    assert {:ok, %{text: "Hello there!"}} =
+             Adapter.stream(request, [credential: credential], fn _ -> :ok end)
+
+    assert_received {:credential, :anthropic}
+    assert {:error, {:signed_out, :anthropic}} = Adapter.stream(request, [], fn _ -> :ok end)
+
+    # recorded beside the caller: polled, not slept on
+    assert Enum.any?(1..200, fn _ ->
+             Usage.by_model(Usage.load(dir), :total) != %{} or
+               (Process.sleep(10) && false)
+           end)
   end
 end

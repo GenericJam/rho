@@ -46,8 +46,10 @@ defmodule Rho.Loop do
   subscription window used up for hours) isn't started. Then the run
   continues on the fallback model (omp's fallback chain, one link):
   `:fallback_model` (default the host's `Rho.Settings.fallback_model/1`),
-  if `:fallback_check` (default `Rho.LLM.usable/1`: signed in,
-  not used up itself) passes, with a `model_change` entry and a notice
+  if `:fallback_check` (`fn model -> :ok | {:error, why} end`; default
+  `Rho.LLM.usable/2` over the loop's `:data_dir` and the `:llm`'s
+  `Rho.LLM.status/1`: signed in, not used up itself) passes, with a
+  `model_change` entry and a notice
   saying why; the session's own model comes back (another `model_change`)
   when the run ends. Without one, the run ends with the error and what to
   do: when the limit lifts, or to prompt again to continue.
@@ -125,7 +127,7 @@ defmodule Rho.Loop do
     rate_limit_cap_ms: 60_000,
     rate_limit_budget_ms: 300_000,
     fallback_model: :settings,
-    fallback_check: &LLM.usable/1,
+    fallback_check: :usable,
     keep_details: nil
   ]
 
@@ -136,8 +138,9 @@ defmodule Rho.Loop do
 
   @doc """
   Options: `:session` and `:entries` (from `Rho.Session.new/3` or
-  `Rho.Session.open/2`), `:system_prompt`, `:data_dir` (given to tools),
-  `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
+  `Rho.Session.open/2`), `:system_prompt`, `:data_dir` (given to tools,
+  and to the model client with each request: where its usage is
+  recorded), `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:withhold_tools` (tool names never offered nor run: `task`
   withholds itself from its subagents), `:before_tool_call` (`fn call,
   ctx -> :allow | {:block, reason} end`), `:keep_details` (`fn tool_name,
@@ -694,6 +697,7 @@ defmodule Rho.Loop do
     %{
       model: s.session.model,
       session_id: s.session.id,
+      data_dir: data_dir(s),
       system_prompt: s.opts[:system_prompt] || Rho.Config.system_prompt(),
       messages: Session.context(entries, inputs(s)),
       tools: for(m <- Map.values(offered(s)), t <- [Tool.to_req_llm(m)], t != nil, do: t),
@@ -865,9 +869,14 @@ defmodule Rho.Loop do
     cond do
       model in [nil, ""] -> {:error, nil}
       Models.same?(model, s.session.model) -> {:error, nil}
-      true -> with :ok <- s.opts.fallback_check.(model), do: {:ok, model}
+      true -> with :ok <- fallback_check(s, model), do: {:ok, model}
     end
   end
+
+  defp fallback_check(%{opts: %{fallback_check: :usable}} = s, model),
+    do: LLM.usable(model, data_dir: data_dir(s), status: LLM.status(s.opts.llm))
+
+  defp fallback_check(s, model), do: s.opts.fallback_check.(model)
 
   defp fail(s, message) do
     stream = s.run.stream
@@ -992,7 +1001,12 @@ defmodule Rho.Loop do
     {mod, llm_opts} = s.opts.llm
     model = s.opts.compaction_model || s.session.model
     max_tokens = s.opts.compaction_max_tokens
-    request = Compaction.summary_request(plan, model, max_tokens, window(s, model))
+
+    request =
+      plan
+      |> Compaction.summary_request(model, max_tokens, window(s, model))
+      |> Map.put(:data_dir, data_dir(s))
+
     loop = self()
 
     {pid, ref} =

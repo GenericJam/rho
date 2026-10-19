@@ -178,4 +178,59 @@ defmodule Rho.Tools.ConsultTest do
     assert {:error, {:signed_out, :google}} = error = Consult.run(@gemini, "q")
     assert Consult.describe(elem(error, 1)) =~ "Not signed in to Gemini (Google)"
   end
+
+  describe "an account's sign-ins, not the node's (a loop's :llm :status)" do
+    defp only_google do
+      signed_out = %{signed_in: false, type: nil, email: nil, expires: nil}
+      status = Map.new(Auth.providers(), &{&1, signed_out})
+      fn -> %{status | google: %{signed_out | signed_in: true, type: :api_key}} end
+    end
+
+    test "models/1 and allowed/2 read the given status" do
+      Application.put_env(:rho, :consult_models, [@gemini, "openai:gpt-5"])
+      # the node has OpenAI, the account only Gemini
+      :ok = Auth.put_api_key(:openai, "sk-proj-node")
+
+      assert Consult.models(only_google()) == [@gemini]
+      assert Consult.allowed(@gemini, only_google()) == :ok
+      assert {:error, why} = Consult.allowed("openai:gpt-5", only_google())
+      assert why =~ "OpenAI isn't signed in"
+      assert why =~ "(available: #{@gemini})"
+    end
+
+    test "ask_model asks with the calling loop's status, and the consult records in its data dir",
+         %{tmp_dir: dir} do
+      # the node has no Gemini key; the loop's account has
+      script = [
+        ask(%{"model" => @gemini, "prompt" => "Check."}),
+        [{:text, "fine"}],
+        [{:text, "ok"}]
+      ]
+
+      %{loop: loop} =
+        start_loop(dir, script, tools: [AskModel], llm_opts: [status: only_google()])
+
+      :ok = Loop.prompt(loop, "go")
+      events = collect()
+
+      assert %{is_error: false, text: "#{@gemini} (second_opinion):\n\nfine"} =
+               Enum.find(events, &(&1.type == :tool_execution_end))
+
+      assert_received {:llm_request, %{data_dir: ^dir}, _lead}
+      assert_received {:llm_request, %{model: @gemini, data_dir: ^dir}, _consult}
+
+      # the same loop with the node's status: Gemini isn't signed in
+      %{loop: loop} =
+        start_loop(dir, [ask(%{"model" => @gemini, "prompt" => "Check."}), [{:text, "ok"}]],
+          tools: [AskModel]
+        )
+
+      :ok = Loop.prompt(loop, "go")
+
+      assert %{is_error: true, text: refused} =
+               Enum.find(collect(), &(&1.type == :tool_execution_end))
+
+      assert refused =~ "Gemini (Google) isn't signed in"
+    end
+  end
 end

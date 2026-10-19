@@ -34,7 +34,18 @@ defmodule Rho.LLM.ReqLLM do
 
   Every call that reached the provider is recorded with
   `Rho.Usage.record/3`: its tokens and cost, the subscription
-  windows its response headers report, and a 429's reset.
+  windows its response headers report, and a 429's reset, under the
+  request's `:data_dir` (the loop's or consult's), else
+  `Rho.Config.data_dir/0`.
+
+  Options (the loop's `llm: {Rho.LLM.ReqLLM, opts}`):
+
+    * `:credential`: `fn provider -> … end` answering as
+      `Rho.Auth.credential/1` does (the default); a host serving several
+      accounts passes its account's (`Rho.Auth.Vault.credential/2`)
+    * `:status`: `fn -> status end` answering as `Rho.Auth.status/0` does
+      (the default), for what reads who is signed in on the loop's behalf
+      (`Rho.LLM.status/1`: the fallback check, `ask_model`)
 
   The cost is req_llm's, from the reply's usage and llm_db's prices.
   req_llm prices a reply only when every conditional tariff of the model
@@ -63,12 +74,17 @@ defmodule Rho.LLM.ReqLLM do
   alias Rho.Usage
 
   @impl true
-  def stream(request, _opts, sink) do
-    case options(request, &Auth.credential/1) do
-      {:ok, opts} -> run(request, opts, sink)
+  def stream(request, opts, sink) do
+    case options(request, credential_fun(opts)) do
+      {:ok, call_opts} -> run(request, call_opts, sink)
       {:error, _normalized} = error -> error
     end
   end
+
+  defp credential_fun(opts) when is_list(opts),
+    do: Keyword.get(opts, :credential, &Auth.credential/1)
+
+  defp credential_fun(_opts), do: &Auth.credential/1
 
   defp run(request, opts, sink) do
     context =
@@ -86,30 +102,42 @@ defmodule Rho.LLM.ReqLLM do
             on_thinking: &sink.({:thinking, &1})
           )
 
-        finish(request.model, result, metadata(meta))
+        finish(request, result, metadata(meta))
 
       {:error, _reason} = error ->
-        finish(request.model, error, %{})
+        finish(request, error, %{})
     end
   end
 
-  defp finish(model, {:ok, response}, meta) do
-    record(model, %{status: meta[:status], headers: meta[:headers] || [], usage: response.usage})
+  defp finish(request, {:ok, response}, meta) do
+    record(
+      request.model,
+      %{
+        status: meta[:status],
+        headers: meta[:headers] || [],
+        usage: response.usage
+      },
+      dir(request)
+    )
+
     {:ok, reply(response)}
   end
 
-  defp finish(model, {:error, reason}, meta) do
+  defp finish(request, {:error, reason}, meta) do
+    model = request.model
     error = normalize(reason)
     {status, headers, body} = http_failure(reason, meta)
     message = with {:http, _status, message} <- error, do: message
     message = if is_binary(message), do: message, else: nil
-    record(model, %{status: status, headers: headers, body: body, error: message || "failed"})
+    call = %{status: status, headers: headers, body: body, error: message || "failed"}
+    record(model, call, dir(request))
     # Read before this call's record lands: the earlier calls' windows.
-    state =
-      if match?({:http, 429, _}, error), do: Usage.load(Rho.Config.data_dir()), else: %{}
+    state = if match?({:http, 429, _}, error), do: Usage.load(dir(request)), else: %{}
 
     {:error, limit(error, model, headers, body, state, System.os_time(:second))}
   end
+
+  defp dir(request), do: request[:data_dir] || Rho.Config.data_dir()
 
   @doc false
   # A 429 / 529 as `{:rate_limited, limit}` (see the moduledoc); `state` is
@@ -248,17 +276,16 @@ defmodule Rho.LLM.ReqLLM do
   defp http_failure(_reason, meta), do: {meta[:status], meta[:headers] || [], nil}
 
   @doc false
-  # Records `call` to `model` beside the caller (it may wait on the store's
-  # lock) and never fails it; the screens hear of it from `Usage.subscribe/0`.
-  # `Rho.Images` records its calls through here too.
-  @spec record(String.t(), Usage.call()) :: :ok
-  def record(model, call) do
-    dir = Rho.Config.data_dir()
-    {:ok, _} = Task.start(fn -> record(dir, model, call) end)
+  # Records `call` to `model` in `dir` beside the caller (it may wait on the
+  # store's lock) and never fails it; the screens hear of it from
+  # `Usage.subscribe/0`. `Rho.Images` records its calls through here too.
+  @spec record(String.t(), Usage.call(), Path.t()) :: :ok
+  def record(model, call, dir \\ Rho.Config.data_dir()) do
+    {:ok, _} = Task.start(fn -> record_in(dir, model, call) end)
     :ok
   end
 
-  defp record(dir, model, call) do
+  defp record_in(dir, model, call) do
     Usage.record(dir, model, call)
   rescue
     e -> Logger.warning("[usage] couldn't record a model call: #{Exception.message(e)}")

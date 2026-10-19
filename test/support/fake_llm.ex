@@ -8,7 +8,9 @@ defmodule Rho.Test.FakeLLM do
   `{:sleep, ms}`, `:block` (never returns; the loop must kill it),
   `{:error, error}` (returns it), `{:usage, map}`, `{:finish, reason}`.
 
-  Every call sends the test `{:llm_request, request, worker_pid}`.
+  Every call sends the test `{:llm_request, request, worker_pid}`. Its
+  opts are the script's agent, or `[fake: agent]` plus other options a
+  loop reads from its `:llm` (`:status`, `Rho.LLM.status/1`).
   """
   @behaviour Rho.LLM
 
@@ -20,6 +22,9 @@ defmodule Rho.Test.FakeLLM do
   def requests(agent), do: Agent.get(agent, & &1.requests)
 
   @impl true
+  def stream(request, opts, sink) when is_list(opts),
+    do: stream(request, Keyword.fetch!(opts, :fake), sink)
+
   def stream(request, agent, sink) do
     {reply, test} =
       Agent.get_and_update(agent, fn

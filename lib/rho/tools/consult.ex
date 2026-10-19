@@ -7,11 +7,12 @@ defmodule Rho.Tools.Consult do
   tools (`Rho.Supervisor`'s `:tools`, or a loop's).
 
   `model` must be one the host allows (`:consult_models`, `Rho.Config`)
-  whose provider is signed in (`Rho.Consult.allowed/1`); a refusal names
-  the ones that may be asked. The schema lists the host's allow-list as
-  `model`'s `enum` when it sets one; the sign-in is checked when the tool
-  runs (the declaration is read in the loop's process, where the
-  credential store isn't).
+  whose provider is signed in (`Rho.Consult.allowed/2`, with the calling
+  loop's `Rho.LLM.status/1`: an account's own sign-ins when the loop's
+  `:llm` carries them); a refusal names the ones that may be asked. The
+  schema lists the host's allow-list as `model`'s `enum` when it sets one;
+  the sign-in is checked when the tool runs (the declaration is read in
+  the loop's process, where the credential store isn't).
 
   The consult is the calling loop's (`ctx.loop`): its events go to the
   loop's subscribers with this call's id (`call_id`), its usage is
@@ -89,7 +90,7 @@ defmodule Rho.Tools.Consult do
   def run(args, ctx) do
     with {:ok, model} <- text(args, "model"),
          {:ok, prompt} <- text(args, "prompt"),
-         :ok <- Consult.allowed(model) do
+         :ok <- Consult.allowed(model, status(ctx[:loop])) do
       purpose = purpose(args["purpose"])
 
       opts =
@@ -109,6 +110,16 @@ defmodule Rho.Tools.Consult do
           {:error, Consult.describe(error)}
       end
     end
+  end
+
+  # Who is signed in for the calling loop (its `:llm`'s); a loop that is
+  # gone has nobody.
+  defp status(nil), do: &Rho.Auth.status/0
+
+  defp status(loop) do
+    Rho.LLM.status(Rho.Loop.config(loop).opts[:llm] || {Rho.LLM.ReqLLM, []})
+  catch
+    :exit, _ -> fn -> %{} end
   end
 
   defp text(args, key) do

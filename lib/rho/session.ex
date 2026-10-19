@@ -203,6 +203,153 @@ defmodule Rho.Session do
     end
   end
 
+  # ── the file as bytes (keeping a copy elsewhere in step) ──
+
+  @doc """
+  The size of a session file's whole lines: its byte size up to and
+  including the last newline (a torn last write, a line without its
+  newline, isn't counted). Session files only grow, by whole lines, so
+  this is a sound cursor for keeping a copy in step: `read_from/3` the
+  bytes after the copy's size, `append_bytes/3` them to the copy.
+  `{:error, posix}` when the file can't be read (`:enoent`: not written yet).
+  """
+  @spec size(Path.t()) :: {:ok, non_neg_integer()} | {:error, File.posix()}
+  def size(path) do
+    with {:ok, io} <- :file.open(path, [:read, :raw, :binary]) do
+      try do
+        {:ok, raw} = :file.position(io, :eof)
+        {:ok, whole_lines(io, raw)}
+      after
+        :file.close(io)
+      end
+    end
+  end
+
+  @tail_chunk 65_536
+
+  # The offset just past the last "\n" at or before `pos`, scanning back.
+  defp whole_lines(_io, 0), do: 0
+
+  defp whole_lines(io, pos) do
+    from = max(pos - @tail_chunk, 0)
+    {:ok, chunk} = :file.pread(io, from, pos - from)
+
+    case :binary.matches(chunk, "\n") do
+      [] -> whole_lines(io, from)
+      matches -> from + elem(List.last(matches), 0) + 1
+    end
+  end
+
+  @doc """
+  The session file's bytes from `offset` to the end of its whole lines
+  (`size/1`), at most `:max_bytes` of them (default all; a chunk may then
+  end mid-line: continue from `offset + byte_size(bytes)`). `{:error,
+  :past_end}` when `offset` is beyond `size/1`.
+  """
+  @spec read_from(Path.t(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, :past_end | File.posix()}
+  def read_from(path, offset, opts \\ []) when is_integer(offset) and offset >= 0 do
+    with {:ok, size} <- size(path) do
+      to =
+        case Keyword.get(opts, :max_bytes, :infinity) do
+          :infinity -> size
+          max -> min(size, offset + max)
+        end
+
+      cond do
+        offset > size -> {:error, :past_end}
+        offset == size -> {:ok, ""}
+        true -> pread(path, offset, to)
+      end
+    end
+  end
+
+  defp pread(path, from, to) do
+    with {:ok, io} <- :file.open(path, [:read, :raw, :binary]) do
+      try do
+        case :file.pread(io, from, to - from) do
+          {:ok, bytes} -> {:ok, bytes}
+          :eof -> {:ok, ""}
+          {:error, _} = error -> error
+        end
+      after
+        :file.close(io)
+      end
+    end
+  end
+
+  @doc """
+  Appends `bytes` (whole lines from another copy's `read_from/3`) to the
+  session file at `path` if its whole lines end at `offset`, creating it
+  (and its directory) when `offset` is 0. Idempotent: a resend whose
+  bytes the file already holds from `offset` (all of them, or the first
+  lines of them, the rest then written) changes nothing more. A torn last
+  line (no newline) is dropped first. Returns the new `size/1`, or
+  `{:error, {:conflict, size}}` when the file's whole lines end elsewhere
+  or hold other bytes there (the copies diverged), `{:error,
+  :partial_line}` when `bytes` doesn't end with a newline.
+
+  No loop may have the session open meanwhile: a loop keeps its leaf and
+  entries in memory and would branch off its own last entry, leaving
+  these out. Stop it, append, then start it again from `open/2`.
+  """
+  @spec append_bytes(Path.t(), non_neg_integer(), binary()) ::
+          {:ok, non_neg_integer()}
+          | {:error, {:conflict, non_neg_integer()} | :partial_line | File.posix()}
+  def append_bytes(path, offset, bytes)
+      when is_integer(offset) and offset >= 0 and is_binary(bytes) do
+    if bytes != "" and :binary.last(bytes) != ?\n,
+      do: {:error, :partial_line},
+      else: append_at(path, offset, bytes)
+  end
+
+  defp append_at(path, offset, bytes) do
+    case size(path) do
+      {:ok, ^offset} ->
+        write_at(path, offset, bytes)
+
+      # A resend: what the file holds past `offset` must be where `bytes` starts.
+      {:ok, size} when size > offset and size <= offset + byte_size(bytes) ->
+        resend(path, offset, size, bytes)
+
+      {:ok, size} ->
+        {:error, {:conflict, size}}
+
+      {:error, :enoent} when offset == 0 ->
+        with :ok <- File.mkdir_p(Path.dirname(path)), do: write_at(path, 0, bytes)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp resend(path, offset, size, bytes) do
+    held = size - offset
+
+    with {:ok, same} <- pread(path, offset, size),
+         <<^same::binary-size(^held), rest::binary>> <- bytes do
+      if rest == "", do: {:ok, size}, else: write_at(path, size, rest)
+    else
+      _ -> {:error, {:conflict, size}}
+    end
+  end
+
+  # Writes `bytes` at `offset`, dropping whatever (a torn line) was past it.
+  defp write_at(path, offset, bytes) do
+    with {:ok, io} <- :file.open(path, [:read, :write, :raw, :binary]) do
+      try do
+        with {:ok, ^offset} <- :file.position(io, offset),
+             :ok <- :file.truncate(io),
+             :ok <- :file.write(io, bytes),
+             :ok <- :file.sync(io) do
+          {:ok, offset + byte_size(bytes)}
+        end
+      after
+        :file.close(io)
+      end
+    end
+  end
+
   # ── entry builders (pi shapes; id/parentId/timestamp added by append/2) ──
 
   @typedoc """

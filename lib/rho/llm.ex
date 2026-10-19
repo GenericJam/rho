@@ -38,7 +38,8 @@ defmodule Rho.LLM do
           required(:messages) => [ReqLLM.Message.t()],
           required(:tools) => [ReqLLM.Tool.t()],
           required(:max_tokens) => pos_integer(),
-          optional(:session_id) => String.t()
+          optional(:session_id) => String.t(),
+          optional(:data_dir) => Path.t()
         }
   @typedoc """
   A rate limit: `retry_after_ms` from the response's `retry-after(-ms)`,
@@ -102,18 +103,33 @@ defmodule Rho.LLM do
   @doc """
   Can `model` take over a run another model's limit stopped: its provider
   signed in, and none of its usage windows used up for more than a minute
-  (`Rho.Usage`)? `:ok` or `{:error, why}`.
+  (`Rho.Usage`)? `:ok` or `{:error, why}`. Options: `:status` (`fn ->
+  status end`, default `Rho.Auth.status/0`), `:data_dir` (where the usage
+  is, default `Rho.Config.data_dir/0`), `:now` (unix s).
   """
-  @spec usable(String.t(), Path.t(), integer()) :: :ok | {:error, String.t()}
-  def usable(model, dir \\ Rho.Config.data_dir(), now \\ System.os_time(:second)) do
+  @spec usable(String.t(), keyword()) :: :ok | {:error, String.t()}
+  def usable(model, opts \\ []) do
+    dir = Keyword.get_lazy(opts, :data_dir, &Rho.Config.data_dir/0)
+    now = Keyword.get_lazy(opts, :now, fn -> System.os_time(:second) end)
+    status = Keyword.get(opts, :status, &Auth.status/0)
+
     with {:ok, provider} <- known(model),
-         {:ok, _creds} <- signed_in(provider) do
+         :ok <- signed_in(provider, status) do
       case Usage.exhausted(Usage.load(dir), provider, now) do
         %{resets_at: at} = limit when at > now + 60 -> {:error, used_up(provider, limit)}
         _ -> :ok
       end
     end
   end
+
+  @doc """
+  Who is signed in for a loop whose model client is `llm` (`{module,
+  opts}`): its `:status` option (`Rho.LLM.ReqLLM`'s), else
+  `Rho.Auth.status/0`, as a function.
+  """
+  @spec status({module(), term()}) :: (-> Auth.status())
+  def status({_mod, opts}) when is_list(opts), do: Keyword.get(opts, :status, &Auth.status/0)
+  def status(_llm), do: &Auth.status/0
 
   defp known(model) do
     case Auth.provider_for_model(model) do
@@ -122,11 +138,10 @@ defmodule Rho.LLM do
     end
   end
 
-  defp signed_in(provider) do
-    case Auth.get(provider) do
-      {:ok, creds} -> {:ok, creds}
-      _ -> {:error, "#{Auth.label(provider)} isn't signed in"}
-    end
+  defp signed_in(provider, status) do
+    if match?(%{signed_in: true}, status.()[provider]),
+      do: :ok,
+      else: {:error, "#{Auth.label(provider)} isn't signed in"}
   end
 
   @doc "What the user sees for a failed call, with the remedy where there is one."

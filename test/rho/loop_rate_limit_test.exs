@@ -155,6 +155,36 @@ defmodule Rho.LoopRateLimitTest do
     assert List.last(events).reason == :error
   end
 
+  test "the default fallback check: signed in by the loop's :llm status, not used up in its data dir",
+       %{tmp_dir: dir} do
+    at = System.os_time(:second) + 3 * 3600
+    signed_out = %{signed_in: false, type: nil, email: nil, expires: nil}
+    status = Map.new(Rho.Auth.providers(), &{&1, signed_out})
+    codex = fn -> %{status | openai_codex: %{signed_out | signed_in: true, type: :oauth}} end
+    start = &start_loop(dir, &1, fallback_model: @fallback, llm_opts: [status: &2])
+
+    # nobody signed in for this loop: no fallback
+    %{loop: loop} = start.([[used_up(at)]], fn -> status end)
+    :ok = Loop.prompt(loop, "hi")
+    assert turn_error(collect()) =~ "(Fallback model: ChatGPT (OpenAI Codex) isn't signed in.)"
+    _ = requested_models()
+
+    # the loop's account has ChatGPT: the run continues on it
+    %{loop: loop} = start.([[used_up(at)], [{:text, "from the fallback"}]], codex)
+    :ok = Loop.prompt(loop, "hi")
+    assert List.last(collect()).reason == :done
+    assert [model(), @fallback] == requested_models()
+
+    # ChatGPT used up in this loop's data dir: no fallback
+    window = %{"used" => 100, "resets_at" => at, "label" => "5 hours"}
+    :ok = Rho.Usage.put_endpoint(dir, :openai_codex, %{"5h" => window}, nil)
+    %{loop: loop} = start.([[used_up(at)]], codex)
+    :ok = Loop.prompt(loop, "hi")
+
+    assert turn_error(collect()) =~
+             "(Fallback model: ChatGPT (OpenAI Codex)'s 5 hours limit is used up"
+  end
+
   test "no fallback configured: a throttle past the budget ends the run with what to do", %{
     tmp_dir: dir
   } do
