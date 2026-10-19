@@ -103,12 +103,16 @@ defmodule Rho.Auth.Vault do
   @spec delete(GenServer.server(), Auth.provider()) :: :ok
   def delete(vault, provider), do: GenServer.call(vault, {:delete, provider})
 
+  # get/status never raise: a caller may be a loop deciding on a fallback
+  # model. A vault that is gone, or busy past the (long) timeout, holds
+  # nothing it can give.
+
   @doc "`provider`'s credentials as held (no refresh), or `:error`."
   @spec get(GenServer.server(), Auth.provider()) :: {:ok, Auth.creds()} | :error
   def get(vault, provider) do
     GenServer.call(vault, {:get, provider}, @call_ms)
   catch
-    :exit, reason -> if stopped?(reason), do: :error, else: exit(reason)
+    :exit, _ -> :error
   end
 
   @doc "Does the vault hold credentials for `provider`?"
@@ -120,8 +124,7 @@ defmodule Rho.Auth.Vault do
   def status(vault) do
     GenServer.call(vault, :status, @call_ms)
   catch
-    :exit, reason ->
-      if stopped?(reason), do: Keeper.status(fn _provider -> :error end), else: exit(reason)
+    :exit, _ -> Keeper.status(fn _provider -> :error end)
   end
 
   @doc "As `Rho.Auth.credential/1`, from the vault (refreshing as the moduledoc says)."
@@ -134,15 +137,12 @@ defmodule Rho.Auth.Vault do
       else: {:error, :signed_out}
   catch
     # The reason isn't shown: a crash's may hold credentials.
-    :exit, reason ->
-      if stopped?(reason),
-        do: {:error, :signed_out},
-        else: {:error, {:refresh_failed, "the account's sign-ins didn't answer"}}
-  end
+    :exit, {:timeout, _call} ->
+      {:error, {:refresh_failed, "the account's sign-ins didn't answer"}}
 
-  defp stopped?({kind, _call}) when kind in [:noproc, :normal, :shutdown], do: true
-  defp stopped?({{:shutdown, _}, _call}), do: true
-  defp stopped?(_reason), do: false
+    :exit, _gone ->
+      {:error, :signed_out}
+  end
 
   @doc "Sends the caller `{:rho_auth_vault, vault_pid, :changed}` after every change, until it exits."
   @spec subscribe(GenServer.server()) :: :ok
