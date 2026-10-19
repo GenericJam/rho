@@ -29,6 +29,9 @@ sessions, context compaction, tools, and model sign-in, on
   another (Claude answers, Gemini pushes back): the `ask_model` tool for
   the lead model, `Rho.Consult.run/3` for the host, and the answer handed
   back as that model's own message in the session.
+- **Pictures** (`Rho.Images`): drawn on the user's ChatGPT sign-in, as
+  Codex draws them (the hosted `image_generation` tool), from words and
+  reference pictures; no API key, it counts against the subscription.
 - **Dyn** (`Rho.Dyn`, optional): tools and screens the agent writes,
   compiles and runs on the device, one approved generation at a time, on
   probation and reverted when they crash.
@@ -130,6 +133,24 @@ without a key fails with `{:error, {:signed_out, provider}}`. The
 attributed message is stored as its own entry (`Rho.Session.attribution/1`
 says which model and purpose) and sent to the lead marked as that model's,
 never the user's.
+
+## Pictures on the ChatGPT sign-in
+
+```elixir
+{:ok, %{mime: "image/png", bytes: png, revised_prompt: _, action: "generate"}} =
+  Rho.Images.generate("The ark of the covenant, two gold cherubim on its lid.",
+    size: "1536x1024", quality: "low")
+
+# draw from a picture: an edit
+{:ok, %{action: "edit"} = edited} =
+  Rho.Images.generate("The same ark, in a desert at dusk.", references: [{"image/png", png}])
+```
+
+It takes 20 to 60 seconds, so call it from a tool's task. Errors are
+`Rho.LLM.error/0`s (`Rho.LLM.describe/1`): `{:signed_out, :openai_codex}`,
+`{:rate_limited, limit}` with the used-up window's reset, and so on.
+`Rho.Images.models/1` lists the Codex models the account may use; the
+ChatGPT account refuses others (gpt-5.5, gpt-image-2).
 
 ## What a host provides
 

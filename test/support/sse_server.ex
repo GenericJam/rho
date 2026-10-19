@@ -6,10 +6,13 @@ defmodule Rho.Test.SSEServer do
   network. Point req_llm at it with
   `Application.put_env(:req_llm, provider, base_url: url)`; each request's
   path comes to the test as `{Rho.Test.SSEServer, :request, path}`.
+
+  A body is a binary, or a list of chunks sent one by one (`{:sleep, ms}`
+  pauses between them), or `{status, body}` for another status than 200.
   """
 
   @doc "Serves `bodies`, one per request, under the test's supervisor; returns the base URL."
-  @spec start!([String.t()]) :: String.t()
+  @spec start!([String.t() | list() | {pos_integer(), String.t() | list()}]) :: String.t()
   def start!(bodies) do
     test = self()
     ExUnit.Callbacks.start_supervised!({Task, fn -> listen(test, bodies) end})
@@ -33,20 +36,28 @@ defmodule Rho.Test.SSEServer do
     Enum.each(bodies, &answer(socket, test, &1))
   end
 
-  defp answer(socket, test, body) do
+  defp answer(socket, test, {status, body}) do
     {:ok, conn} = :gen_tcp.accept(socket)
     {path, _request_body} = read_request(conn, "")
     send(test, {__MODULE__, :request, path})
+    chunks = List.wrap(body)
+    size = chunks |> Enum.filter(&is_binary/1) |> Enum.map(&byte_size/1) |> Enum.sum()
 
     :ok =
       :gen_tcp.send(conn, [
-        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n",
-        "content-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n",
-        body
+        "HTTP/1.1 #{status} OK\r\ncontent-type: text/event-stream\r\n",
+        "content-length: #{size}\r\nconnection: close\r\n\r\n"
       ])
+
+    Enum.each(chunks, fn
+      {:sleep, ms} -> Process.sleep(ms)
+      chunk -> :gen_tcp.send(conn, chunk)
+    end)
 
     :gen_tcp.close(conn)
   end
+
+  defp answer(socket, test, body), do: answer(socket, test, {200, body})
 
   defp read_request(conn, acc) do
     case :binary.split(acc, "\r\n\r\n") do

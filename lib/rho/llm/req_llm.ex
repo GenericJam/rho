@@ -247,9 +247,12 @@ defmodule Rho.LLM.ReqLLM do
 
   defp http_failure(_reason, meta), do: {meta[:status], meta[:headers] || [], nil}
 
-  # Usage bookkeeping runs beside the call (it may wait on the store's lock)
-  # and never fails it; the screens hear of it from `Usage.subscribe/0`.
-  defp record(model, call) do
+  @doc false
+  # Records `call` to `model` beside the caller (it may wait on the store's
+  # lock) and never fails it; the screens hear of it from `Usage.subscribe/0`.
+  # `Rho.Images` records its calls through here too.
+  @spec record(String.t(), Usage.call()) :: :ok
+  def record(model, call) do
     dir = Rho.Config.data_dir()
     {:ok, _} = Task.start(fn -> record(dir, model, call) end)
     :ok
@@ -322,7 +325,12 @@ defmodule Rho.LLM.ReqLLM do
     end
   end
 
-  defp credential(provider, credential) do
+  @doc false
+  # `credential`'s answer for `provider` (`Rho.Auth.credential/1`) as the
+  # options need it, or the call's error.
+  @spec credential(Auth.provider(), (Auth.provider() -> term())) ::
+          {:ok, Auth.credential()} | {:error, Rho.LLM.error()}
+  def credential(provider, credential) do
     case credential.(provider) do
       {:ok, %{type: type} = auth} when type in [:oauth, :api_key] ->
         {:ok, auth}

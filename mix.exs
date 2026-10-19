@@ -87,7 +87,8 @@ defmodule Rho.MixProject do
           Rho.Models,
           Rho.Usage,
           Rho.Usage.Fetch,
-          Rho.Budget
+          Rho.Budget,
+          Rho.Images
         ],
         "Sign-in & credentials": [
           Rho.Auth,
