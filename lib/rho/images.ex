@@ -21,7 +21,7 @@ defmodule Rho.Images do
   `:model` (default #{inspect("gpt-5.6-luna")}, the fastest of Codex's
   models that drew in testing, 2026-10-18; gpt-5.6-sol, gpt-6-luna,
   gpt-6-astra and gpt-6.1-sol drew too). The ChatGPT account accepts only
-  the models Codex lists for it (`models/1`, Codex's own
+  the models Codex lists for it (`Rho.Models.Codex`, Codex's own
   `GET /backend-api/codex/models`); gpt-5.5 and gpt-image-2 are refused
   with a 400 ("not supported when using Codex with a ChatGPT account").
   When the account refuses the model, `generate/2` asks that list once and
@@ -47,16 +47,10 @@ defmodule Rho.Images do
 
   alias Rho.Auth
   alias Rho.LLM.ReqLLM, as: Adapter
+  alias Rho.Models.Codex
   alias Rho.Usage
 
-  @base_url "https://chatgpt.com/backend-api/codex"
   @default_model "gpt-5.6-luna"
-  # The Codex CLI version whose model list `models/1` asks for (the
-  # current release on 2026-10-18): the endpoint lists the models a client
-  # of that version may use, so it needs one (an old one gets fewer models,
-  # a very old one none). `:client_version` overrides it.
-  @client_version "0.163.0"
-  @originator "codex_cli_rs"
   @formats %{"png" => "image/png", "jpeg" => "image/jpeg", "webp" => "image/webp"}
   @instructions """
   Draw the picture the user describes with the image_generation tool. When \
@@ -98,7 +92,7 @@ defmodule Rho.Images do
     * tests: `:credential` (as `Rho.Auth.credential/1`), `:respond` (the
       fake `Req.Response` for each `Req.Request`), `:base_url`, `:data_dir`
       (where usage is recorded, default `Rho.Config.data_dir/0`), `:now`,
-      `:client_version` (`models/1`'s)
+      `:client_version` (`Rho.Models.Codex.fetch/1`'s, for a refused model)
   """
   @spec generate(String.t(), keyword()) :: {:ok, picture()} | {:error, Rho.LLM.error()}
   def generate(prompt, opts \\ []) when is_binary(prompt) do
@@ -128,67 +122,12 @@ defmodule Rho.Images do
     end
   end
 
-  @doc """
-  The model ids the ChatGPT account may use with Codex, in Codex's order
-  (its picker's, by priority: the first is Codex's default), hidden ones
-  left out: Codex's `GET /backend-api/codex/models`, asked as Codex CLI
-  #{@client_version} (`:client_version`). Takes `generate/2`'s
-  `:credential`, `:respond` and `:base_url`.
-  """
-  @spec models(keyword()) :: {:ok, [String.t()]} | {:error, Rho.LLM.error()}
-  def models(opts \\ []) do
-    credential = Keyword.get(opts, :credential, &Auth.credential/1)
-
-    with {:ok, auth} <- Adapter.credential(:openai_codex, credential) do
-      req =
-        request(opts,
-          method: :get,
-          url: "/models",
-          params: [client_version: Keyword.get(opts, :client_version, @client_version)],
-          headers: headers(auth, "application/json"),
-          receive_timeout: 15_000
-        )
-
-      case Req.request(req) do
-        {:ok, %Req.Response{status: 200, body: body}} ->
-          listed(body)
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          {:error, {:http, status, error_text(body)}}
-
-        {:error, e} ->
-          {:error, Adapter.normalize(e)}
-      end
-    end
-  end
-
-  # The picker's models (visibility "list"), by priority; anything else in
-  # the list is skipped.
-  defp listed(body) do
-    case Jason.decode(body) do
-      {:ok, %{"models" => models}} when is_list(models) ->
-        {:ok,
-         models
-         |> Enum.filter(
-           &match?(%{"slug" => slug, "visibility" => "list"} when is_binary(slug), &1)
-         )
-         |> Enum.sort_by(&priority/1)
-         |> Enum.map(& &1["slug"])}
-
-      _ ->
-        {:error, {:other, "Codex's model list wasn't JSON with models"}}
-    end
-  end
-
-  defp priority(%{"priority" => p}) when is_number(p), do: p
-  defp priority(_model), do: 1_000
-
   # The account refused `model`: draw once with the model Codex itself
   # uses by default (the first it lists), which is what draws in Codex.
   defp fallback(model, message, prompt, auth, opts) do
-    case models(opts) do
-      {:ok, [^model | _]} -> {:error, {:http, 400, message}}
-      {:ok, [first | _]} -> first |> draw(prompt, auth, opts) |> refused_as_http()
+    case Codex.fetch(opts) do
+      {:ok, [%{id: ^model} | _]} -> {:error, {:http, 400, message}}
+      {:ok, [%{id: first} | _]} -> first |> draw(prompt, auth, opts) |> refused_as_http()
       _ -> {:error, {:http, 400, message}}
     end
   end
@@ -201,10 +140,10 @@ defmodule Rho.Images do
     spec = "openai_codex:" <> model
 
     req =
-      request(opts,
+      Codex.request(opts,
         method: :post,
         url: "/responses",
-        headers: headers(auth, "text/event-stream"),
+        headers: Codex.headers(auth, "text/event-stream"),
         json: body(model, prompt, format, opts),
         receive_timeout: Keyword.get(opts, :timeout, @timeout),
         into: &collect/2
@@ -272,31 +211,6 @@ defmodule Rho.Images do
       "store" => false,
       "stream" => true
     }
-  end
-
-  defp request(opts, req_opts) do
-    req =
-      Req.new(
-        [
-          base_url: Keyword.get(opts, :base_url, @base_url),
-          retry: false,
-          decode_body: false,
-          connect_options: [timeout: 15_000]
-        ] ++ req_opts
-      )
-
-    case opts[:respond] do
-      nil -> req
-      respond -> Req.Request.append_request_steps(req, respond: &{&1, respond.(&1)})
-    end
-  end
-
-  defp headers(auth, accept) do
-    [
-      {"authorization", "Bearer #{auth.token}"},
-      {"originator", @originator},
-      {"accept", accept}
-    ] ++ if(auth[:account_id], do: [{"chatgpt-account-id", auth.account_id}], else: [])
   end
 
   # ── the stream ──
@@ -516,11 +430,11 @@ defmodule Rho.Images do
         _ -> nil
       end
 
-    message = error_text(body)
+    message = Codex.error_text(body)
     record(spec, %{status: status, headers: headers, body: json, error: message}, opts)
 
     cond do
-      status == 400 and refused_model?(message) ->
+      status == 400 and Codex.refused?(message) ->
         {:error, {:refused_model, message}}
 
       status == 429 ->
@@ -530,19 +444,6 @@ defmodule Rho.Images do
 
       true ->
         {:error, {:http, status, message}}
-    end
-  end
-
-  defp refused_model?(message),
-    do: String.contains?(message, "not supported when using Codex with a ChatGPT account")
-
-  # The provider's own message, bounded; the status alone when it has none.
-  defp error_text(body) do
-    case Jason.decode(to_string(body)) do
-      {:ok, %{"error" => %{"message" => m}}} when is_binary(m) -> String.slice(m, 0, 300)
-      {:ok, %{"error" => m}} when is_binary(m) -> String.slice(m, 0, 300)
-      {:ok, %{"detail" => m}} when is_binary(m) -> String.slice(m, 0, 300)
-      _ -> "no message"
     end
   end
 

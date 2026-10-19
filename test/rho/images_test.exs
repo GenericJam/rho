@@ -361,25 +361,4 @@ defmodule Rho.ImagesTest do
                Usage.by_model(Usage.load(dir), :total)["openai_codex:gpt-5.6-luna"]
     end
   end
-
-  describe "models/1" do
-    test "the picker's ids in Codex's order; hidden, unlisted and malformed entries left out" do
-      body =
-        Jason.encode!(%{
-          "models" => [
-            %{"slug" => "b", "visibility" => "list", "priority" => 5},
-            %{"slug" => "hidden", "visibility" => "hide", "priority" => 4},
-            %{"slug" => "unlisted", "visibility" => "none", "priority" => 0},
-            %{"slug" => "no-visibility", "priority" => 0},
-            1,
-            %{"slug" => "c", "visibility" => "list"},
-            %{"slug" => "a", "visibility" => "list", "priority" => 1}
-          ]
-        })
-
-      respond = scripted([Req.Response.new(status: 200, body: body)])
-
-      assert {:ok, ["a", "b", "c"]} = Images.models(credential: &signed_in/1, respond: respond)
-    end
-  end
 end

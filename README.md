@@ -20,7 +20,9 @@ sessions, context compaction, tools, and model sign-in, on
   output spilled to an artifact the agent pages through.
 - **Models** (`Rho.LLM`, `Rho.LLM.ReqLLM`, `Rho.Models`, `Rho.Usage`):
   Anthropic, OpenAI, OpenAI Codex and Google, with subscription usage
-  windows and per-model counters.
+  windows and per-model counters. The ChatGPT sign-in's models are the
+  ones Codex lists for the account (`Rho.Models.Codex`, fetched and kept);
+  a session on one it no longer accepts moves to its default with a notice.
 - **Auth** (`Rho.Auth`, `Rho.Auth.Login`): Claude Pro/Max and ChatGPT
   (Codex) subscriptions through omp's OAuth PKCE flows, with refresh
   coordination and refresh-token rotation; or an API key for Anthropic,
@@ -149,7 +151,7 @@ never the user's.
 It takes 20 to 60 seconds, so call it from a tool's task. Errors are
 `Rho.LLM.error/0`s (`Rho.LLM.describe/1`): `{:signed_out, :openai_codex}`,
 `{:rate_limited, limit}` with the used-up window's reset, and so on.
-`Rho.Images.models/1` lists the Codex models the account may use; the
+`Rho.Models.Codex` lists the Codex models the account may use; the
 ChatGPT account refuses others (gpt-5.5, gpt-image-2).
 
 ## What a host provides

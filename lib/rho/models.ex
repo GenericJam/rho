@@ -9,18 +9,14 @@ defmodule Rho.Models do
       deprecated ones left out. Claude: newest first within Opus, Sonnet,
       Haiku, then the rest. OpenAI and Gemini: the chat models that take
       tools, newest release first.
-    * ChatGPT (`openai_codex:`): the Codex backend serves its own set,
-      which llm_db doesn't list; `priv/models/openai_codex.json` is omp's
-      list (its source and version are in the file).
+    * ChatGPT (`openai_codex:`): the models the Codex backend accepts
+      for a ChatGPT account, which llm_db doesn't list: Codex's own list,
+      fetched and kept by `Rho.Models.Codex`, in Codex's order (the first
+      is the sign-in's default).
   """
 
   alias Rho.Auth
-
-  # Read at compile time and embedded: Application.app_dir/2 can't resolve
-  # priv/ on a phone.
-  @codex_file Path.expand("../../priv/models/openai_codex.json", __DIR__)
-  @external_resource @codex_file
-  @codex (@codex_file |> File.read!() |> Jason.decode!())["models"]
+  alias Rho.Models.Codex
 
   @type model :: %{
           provider: Auth.provider(),
@@ -41,7 +37,12 @@ defmodule Rho.Models do
     end
   end
 
-  @doc "Every model of `provider` in the catalog, whether signed in or not."
+  @doc """
+  Every model of `provider` in the catalog, whether signed in or not.
+  ChatGPT's is `Rho.Models.Codex`'s current list, asked for again in the
+  background (with `Rho.Auth`'s sign-in) when it is stale, so a picker
+  should ask each time it opens rather than keep it.
+  """
   @spec catalog(Auth.provider()) :: [model()]
   def catalog(:anthropic) do
     :anthropic
@@ -51,12 +52,14 @@ defmodule Rho.Models do
   end
 
   def catalog(:openai_codex) do
-    for m <- @codex,
+    Codex.refresh_async()
+
+    for m <- Codex.models(),
         do: %{
           provider: :openai_codex,
-          spec: "openai_codex:" <> m["id"],
-          name: m["name"],
-          context: m["context"]
+          spec: "openai_codex:" <> m.id,
+          name: m.name,
+          context: m.context
         }
   end
 
@@ -93,6 +96,15 @@ defmodule Rho.Models do
       context: get_in(m, [Access.key(:limits), :context])
     }
   end
+
+  @doc """
+  The model a saved `spec` runs as: itself, or, for a ChatGPT model the
+  sign-in no longer accepts (`Rho.Models.Codex.replacement/1`), the
+  sign-in's default. A loop makes the same move when a run starts, with a
+  notice.
+  """
+  @spec resolve(String.t()) :: String.t()
+  def resolve(spec) when is_binary(spec), do: Codex.replacement(spec) || spec
 
   @doc """
   Whether two model specs name the same model, ignoring a dated snapshot

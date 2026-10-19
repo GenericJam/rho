@@ -66,6 +66,9 @@ defmodule Rho.Config do
       consults too), per purpose: a map `%{purpose => text}`, or a 1-arity
       function / MFA called with the purpose last, returning the text or
       nil. Default (and for nil): rho's own for the purpose.
+    * `:codex_models_refresh`: whether `Rho.Models.Codex` fetches the
+      ChatGPT sign-in's model list in the background when it is stale.
+      Default `true`; tests set `false` (no network).
     * `:dyn`: the Dyn layer (agent-written code, `Rho.Dyn`), off by
       default; its keys are `Rho.Dyn.Config`'s.
   """

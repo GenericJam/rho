@@ -12,7 +12,7 @@ defmodule Rho.ModelsTest do
     on_exit(fn -> for p <- Auth.providers(), do: Rho.CredentialStore.delete("auth:#{p}") end)
   end
 
-  test "ChatGPT signed in: omp's Codex models are listed" do
+  test "ChatGPT signed in: the sign-in's Codex models are listed, not ones it refuses" do
     :ok = Auth.put(:anthropic, @creds)
     :ok = Auth.put(:openai_codex, @creds)
 
@@ -23,7 +23,9 @@ defmodule Rho.ModelsTest do
              {:google, false, []}
            ] = Models.by_provider()
 
-    assert Enum.any?(codex, &(&1.spec == "openai_codex:gpt-5.5"))
+    assert [_ | _] = codex
+    assert Enum.all?(codex, &String.starts_with?(&1.spec, "openai_codex:"))
+    refute Enum.any?(codex, &(&1.spec == "openai_codex:gpt-5.5"))
     refute Enum.any?(codex, &String.contains?(&1.spec, "image"))
     assert Models.same?("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5-20251001")
   end
