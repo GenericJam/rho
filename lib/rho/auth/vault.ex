@@ -29,23 +29,26 @@ defmodule Rho.Auth.Vault do
     * `:on_refresh`: `fn provider, creds -> :ok | {:error, reason} end`,
       called in the vault's process after rho refreshed a sign-in (not
       after a `put/3`, nor a refresh `:refresher` did); it must not call
-      the vault. Default: nothing to tell.
+      the vault, and should be quick (queue the news, don't wait on a
+      network). A raise or any other answer counts as an error.
+      Default: nothing to tell.
     * `:refresher`: `fn provider -> {:ok, creds} | :local end`, asked first
       whenever a sign-in needs refreshing, in a process of its own: someone
       else (the phone holding the account) refreshes it and answers with
       the new credentials, which the vault keeps without calling
       `:on_refresh`; `:local` (or a crash, invalid credentials, or no answer
-      within `:refresher_timeout`, 20 s) and the vault refreshes itself. If
-      the refreshed credentials arrive by `put/3` meanwhile, they win and
-      the answer is dropped. Credentials that are valid but not fresh
-      enough are refreshed here from their refresh token.
+      within `:refresher_timeout`, 20 s, at most 30 s) and the vault
+      refreshes itself. If the refreshed credentials arrive by `put/3`
+      meanwhile, they win and the refresh is stopped. Credentials that are
+      valid but not fresh enough are refreshed here from their refresh token.
     * `:name`, `:save_retry_ms` (5 s), `:respond` (tests: answers the token
       endpoint, `Rho.Auth.OAuthFlow`).
 
   Subscribers (`subscribe/1`) get `{:rho_auth_vault, vault, :changed}` on
   every put, delete, refresh (done or failed) and failed `:on_refresh`.
-  A vault that has stopped holds nothing: `get/2` is `:error`, `status/1`
-  all signed out, `credential/2` `{:error, :signed_out}`.
+  A vault that has stopped holds nothing (`get/2` is `:error`, `status/1`
+  all signed out, `credential/2` `{:error, :signed_out}`), and a refresh it
+  had started stops with it.
   """
   @behaviour Rho.Auth.Keeper
 
@@ -54,6 +57,9 @@ defmodule Rho.Auth.Vault do
   alias Rho.Auth.OAuthFlow
 
   @refresher_timeout 20_000
+  @max_refresher_timeout 30_000
+  # A refresher's longest wait, then a refresh here and a queued one.
+  @call_ms @max_refresher_timeout + 90_000
 
   @doc false
   def child_spec(opts),
@@ -66,7 +72,8 @@ defmodule Rho.Auth.Vault do
       creds: %{},
       on_refresh: Keyword.get(opts, :on_refresh, fn _provider, _creds -> :ok end),
       refresher: opts[:refresher],
-      refresher_timeout: Keyword.get(opts, :refresher_timeout, @refresher_timeout),
+      refresher_timeout:
+        min(Keyword.get(opts, :refresher_timeout, @refresher_timeout), @max_refresher_timeout),
       oauth: Keyword.take(opts, [:respond])
     }
 
@@ -99,9 +106,9 @@ defmodule Rho.Auth.Vault do
   @doc "`provider`'s credentials as held (no refresh), or `:error`."
   @spec get(GenServer.server(), Auth.provider()) :: {:ok, Auth.creds()} | :error
   def get(vault, provider) do
-    GenServer.call(vault, {:get, provider})
+    GenServer.call(vault, {:get, provider}, @call_ms)
   catch
-    :exit, _ -> :error
+    :exit, reason -> if stopped?(reason), do: :error, else: exit(reason)
   end
 
   @doc "Does the vault hold credentials for `provider`?"
@@ -111,9 +118,10 @@ defmodule Rho.Auth.Vault do
   @doc "As `Rho.Auth.status/0`, for the vault's credentials."
   @spec status(GenServer.server()) :: Auth.status()
   def status(vault) do
-    GenServer.call(vault, :status)
+    GenServer.call(vault, :status, @call_ms)
   catch
-    :exit, _ -> Keeper.status(fn _provider -> :error end)
+    :exit, reason ->
+      if stopped?(reason), do: Keeper.status(fn _provider -> :error end), else: exit(reason)
   end
 
   @doc "As `Rho.Auth.credential/1`, from the vault (refreshing as the moduledoc says)."
@@ -122,14 +130,19 @@ defmodule Rho.Auth.Vault do
           | {:error, :signed_out | {:refresh_failed, String.t()} | {:store_failed, term()}}
   def credential(vault, provider) do
     if provider in Auth.providers(),
-      do: GenServer.call(vault, {:credential, provider}, Keeper.refresh_call_ms()),
+      do: GenServer.call(vault, {:credential, provider}, @call_ms),
       else: {:error, :signed_out}
   catch
-    :exit, {:noproc, _} -> {:error, :signed_out}
-    :exit, {:normal, _} -> {:error, :signed_out}
-    :exit, {:shutdown, _} -> {:error, :signed_out}
-    :exit, reason -> {:error, {:refresh_failed, "the vault didn't answer (#{inspect(reason)})"}}
+    # The reason isn't shown: a crash's may hold credentials.
+    :exit, reason ->
+      if stopped?(reason),
+        do: {:error, :signed_out},
+        else: {:error, {:refresh_failed, "the account's sign-ins didn't answer"}}
   end
+
+  defp stopped?({kind, _call}) when kind in [:noproc, :normal, :shutdown], do: true
+  defp stopped?({{:shutdown, _}, _call}), do: true
+  defp stopped?(_reason), do: false
 
   @doc "Sends the caller `{:rho_auth_vault, vault_pid, :changed}` after every change, until it exits."
   @spec subscribe(GenServer.server()) :: :ok
@@ -142,13 +155,27 @@ defmodule Rho.Auth.Vault do
 
   @impl Keeper
   def write(b, provider, creds, :refresh) do
-    case b.on_refresh.(provider, creds) do
+    case told(b.on_refresh, provider, creds) do
       :ok -> {:ok, put_in(b.creds[provider], creds)}
       {:error, _} = error -> error
     end
   end
 
   def write(b, provider, creds, _origin), do: {:ok, put_in(b.creds[provider], creds)}
+
+  # `:on_refresh`'s answer; a raise or anything else is an error (never the
+  # crash, whose report would show the credentials).
+  defp told(on_refresh, provider, creds) do
+    case on_refresh.(provider, creds) do
+      :ok -> :ok
+      {:error, _} = error -> error
+      _other -> {:error, :bad_on_refresh_answer}
+    end
+  rescue
+    _ -> {:error, :on_refresh_raised}
+  catch
+    _kind, _ -> {:error, :on_refresh_raised}
+  end
 
   @impl Keeper
   def remove(b, provider), do: {:ok, %{b | creds: Map.delete(b.creds, provider)}}

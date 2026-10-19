@@ -281,13 +281,17 @@ defmodule Rho.Session do
   @doc """
   Appends `bytes` (whole lines from another copy's `read_from/3`) to the
   session file at `path` if its whole lines end at `offset`, creating it
-  (and its directory) when `offset` is 0. Idempotent: when the file already
-  ends with exactly these bytes at `offset` (a resend), nothing is written.
-  A torn last line (no newline) is dropped first. Returns the new
-  `size/1`, or `{:error, {:conflict, size}}` when the file's whole lines
-  end elsewhere (the copies diverged), `{:error, :partial_line}` when
-  `bytes` doesn't end with a newline. Nothing else may be writing the
-  file meanwhile (its loop is stopped or idle).
+  (and its directory) when `offset` is 0. Idempotent: a resend whose
+  bytes the file already holds from `offset` (all of them, or the first
+  lines of them, the rest then written) changes nothing more. A torn last
+  line (no newline) is dropped first. Returns the new `size/1`, or
+  `{:error, {:conflict, size}}` when the file's whole lines end elsewhere
+  or hold other bytes there (the copies diverged), `{:error,
+  :partial_line}` when `bytes` doesn't end with a newline.
+
+  No loop may have the session open meanwhile: a loop keeps its leaf and
+  entries in memory and would branch off its own last entry, leaving
+  these out. Stop it, append, then start it again from `open/2`.
   """
   @spec append_bytes(Path.t(), non_neg_integer(), binary()) ::
           {:ok, non_neg_integer()}
@@ -304,10 +308,9 @@ defmodule Rho.Session do
       {:ok, ^offset} ->
         write_at(path, offset, bytes)
 
-      {:ok, size} when size == offset + byte_size(bytes) ->
-        if pread(path, offset, size) == {:ok, bytes},
-          do: {:ok, size},
-          else: {:error, {:conflict, size}}
+      # A resend: what the file holds past `offset` must be where `bytes` starts.
+      {:ok, size} when size > offset and size <= offset + byte_size(bytes) ->
+        resend(path, offset, size, bytes)
 
       {:ok, size} ->
         {:error, {:conflict, size}}
@@ -317,6 +320,17 @@ defmodule Rho.Session do
 
       {:error, _} = error ->
         error
+    end
+  end
+
+  defp resend(path, offset, size, bytes) do
+    held = size - offset
+
+    with {:ok, same} <- pread(path, offset, size),
+         <<^same::binary-size(^held), rest::binary>> <- bytes do
+      if rest == "", do: {:ok, size}, else: write_at(path, size, rest)
+    else
+      _ -> {:error, {:conflict, size}}
     end
   end
 

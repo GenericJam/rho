@@ -202,6 +202,8 @@ each account's credentials in memory, in a `Rho.Auth.Vault`:
 :ok = Rho.Auth.Vault.put(vault, :anthropic, creds_from_the_phone)
 
 Rho.start_loop(
+  # the account's own directory: its sessions, usage and artifacts
+  session: Rho.Session.new(Path.join(account_dir, "sessions"), model, account_dir),
   data_dir: account_dir,
   llm:
     {Rho.LLM.ReqLLM,

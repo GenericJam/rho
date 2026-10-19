@@ -267,4 +267,45 @@ defmodule Rho.Auth.VaultTest do
     assert Vault.get(v, :anthropic) == :error
     refute Vault.status(v).anthropic.signed_in
   end
+
+  test "a vault stopped mid-refresh stops it: the refresh token is never spent afterwards" do
+    test = self()
+
+    refresher = fn _provider ->
+      send(test, {:asked, self()})
+      Process.sleep(:infinity)
+    end
+
+    {:ok, v} = Vault.start_link(respond: endpoint(), on_refresh: told(), refresher: refresher)
+    :ok = Vault.put(v, :anthropic, due())
+    caller = Task.async(fn -> Vault.credential(v, :anthropic) end)
+    assert_receive {:asked, asked}
+    ref = Process.monitor(asked)
+
+    :ok = GenServer.stop(v)
+    assert Task.await(caller) == {:error, :signed_out}
+    assert_receive {:DOWN, ^ref, :process, ^asked, _}
+    refute_receive {:refresh_request, _}, 100
+  end
+
+  test "an :on_refresh that raises or answers oddly holds the sign-in back; the vault lives on" do
+    for on_refresh <- [fn _, _ -> raise "boom" end, fn _, _ -> {:ok, :queued} end] do
+      v = vault(respond: endpoint(), on_refresh: on_refresh, save_retry_ms: 60_000)
+      :ok = Vault.put(v, :anthropic, due())
+
+      assert {:error, {:store_failed, _}} = Vault.credential(v, :anthropic)
+      assert Process.alive?(v)
+    end
+  end
+
+  test "its status for :sys and crash reports shows no credential" do
+    v = vault(respond: endpoint(), on_refresh: told(:error), save_retry_ms: 60_000)
+    :ok = Vault.put(v, :anthropic, due())
+    {:error, {:store_failed, _}} = Vault.credential(v, :anthropic)
+
+    shown = inspect(:sys.get_status(v))
+    refute shown =~ "rt-1"
+    refute shown =~ "at-2"
+    refute shown =~ "rt-2"
+  end
 end

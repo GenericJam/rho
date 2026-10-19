@@ -512,6 +512,12 @@ defmodule Rho.SessionTest do
       assert Session.append_bytes(path, 16, "{\"c\":3}\n") == {:ok, 24}
       assert File.read!(path) == a <> b <> "{\"c\":3}\n"
 
+      # a resend that has grown since (the ack was lost, then more came): the rest is written
+      d = "{\"d\":4}\n"
+      assert Session.append_bytes(path, 16, "{\"c\":3}\n" <> d) == {:ok, 32}
+      assert File.read!(path) == a <> b <> "{\"c\":3}\n" <> d
+      assert Session.append_bytes(path, 16, "{\"x\":0}\n" <> d) == {:error, {:conflict, 32}}
+
       assert Session.append_bytes(Path.join(dir, "missing.jsonl"), 8, a) == {:error, :enoent}
     end
   end

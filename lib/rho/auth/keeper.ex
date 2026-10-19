@@ -38,9 +38,9 @@ defmodule Rho.Auth.Keeper do
   @callback changed(bstate()) :: term()
 
   @refresh_margin_ms 5 * 60_000
-  # Longer than a refresh's own timeouts (30 s) plus a queued one, plus a
-  # Vault's delegated refresh (20 s).
-  @refresh_call_ms 75_000
+  # Longer than a refresh's own timeouts (10 s to connect, 30 s to answer)
+  # plus a queued one.
+  @refresh_call_ms 90_000
   @save_retry_ms 5_000
 
   @spec start_link(module(), bstate(), keyword(), keyword()) :: GenServer.on_start()
@@ -166,10 +166,11 @@ defmodule Rho.Auth.Keeper do
 
   def handle_info({:save, provider}, s), do: {:noreply, save_unsaved(s, provider)}
 
-  def handle_info({:DOWN, ref, :process, pid, reason}, s) do
+  def handle_info({:DOWN, ref, :process, pid, _reason}, s) do
     case Enum.find(s.refreshing, fn {_p, r} -> r.ref == ref end) do
+      # The reason may hold the credentials: it isn't passed on.
       {provider, _r} ->
-        {:noreply, refresh_done(s, provider, {:error, "crashed: #{inspect(reason)}"})}
+        {:noreply, refresh_done(s, provider, {:error, "the refresh stopped unexpectedly"})}
 
       nil ->
         {:noreply, %{s | subscribers: Map.delete(s.subscribers, pid)}}
@@ -177,6 +178,21 @@ defmodule Rho.Auth.Keeper do
   end
 
   def handle_info(_msg, s), do: {:noreply, s}
+
+  # Crash reports and :sys.get_status/1 never show a credential.
+  @impl true
+  def format_status(status) do
+    status
+    |> Map.update(:state, nil, fn
+      %{b: _} = s -> %{s | b: :redacted, unsaved: Map.keys(s.unsaved)}
+      other -> other
+    end)
+    |> Map.update(:message, nil, fn
+      {:refreshed, provider, _result} -> {:refreshed, provider, :redacted}
+      {:put, provider, _creds} -> {:put, provider, :redacted}
+      other -> other
+    end)
+  end
 
   # ── refresh ──
 
@@ -210,13 +226,37 @@ defmodule Rho.Auth.Keeper do
     end
   end
 
+  # The refresh runs in a worker of its own (the keeper keeps answering),
+  # under a runner that ends it when the keeper goes (a stopped vault never
+  # spends a refresh token afterwards) or the refresh is superseded.
   defp start_refresh(s, provider, creds, waiters) do
     owner = self()
     run = s.backend.refresh(s.b, provider, creds)
 
-    {pid, ref} = spawn_monitor(fn -> send(owner, {:refreshed, provider, run.()}) end)
+    {pid, ref} = spawn_monitor(fn -> run_refresh(owner, provider, run) end)
 
     put_in(s.refreshing[provider], %{pid: pid, ref: ref, waiters: waiters, superseded: false})
+  end
+
+  defp run_refresh(owner, provider, run) do
+    owner_ref = Process.monitor(owner)
+    Process.flag(:trap_exit, true)
+    me = self()
+    worker = spawn_link(fn -> send(me, {:result, run.()}) end)
+
+    receive do
+      {:result, result} ->
+        send(owner, {:refreshed, provider, result})
+
+      {:EXIT, ^worker, _reason} ->
+        send(owner, {:refreshed, provider, {:error, "the refresh stopped unexpectedly"}})
+
+      {:DOWN, ^owner_ref, :process, _, _} ->
+        Process.exit(worker, :kill)
+
+      :stop ->
+        Process.exit(worker, :kill)
+    end
   end
 
   defp refresh_done(s, provider, result) do
@@ -303,7 +343,7 @@ defmodule Rho.Auth.Keeper do
         s
 
       r ->
-        Process.exit(r.pid, :kill)
+        send(r.pid, :stop)
         put_in(s.refreshing[provider], %{r | superseded: true})
     end
   end
