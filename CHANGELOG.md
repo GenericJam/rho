@@ -6,6 +6,8 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-18
+
 ### Added
 
 - **Pictures on the ChatGPT sign-in** (`Rho.Images.generate/2`): the
@@ -207,7 +209,8 @@ can share it.
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
 
-[Unreleased]: https://github.com/GenericJam/rho/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/GenericJam/rho/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/GenericJam/rho/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/GenericJam/rho/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GenericJam/rho/compare/v0.1.0...v0.2.0

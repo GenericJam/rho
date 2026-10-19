@@ -51,7 +51,7 @@ name the pi source each piece follows.
 
 ```elixir
 def deps do
-  [{:rho, "~> 0.3"}]
+  [{:rho, "~> 0.4"}]
 end
 ```
 
