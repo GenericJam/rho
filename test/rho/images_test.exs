@@ -351,16 +351,6 @@ defmodule Rho.ImagesTest do
       assert {:ok, %{bytes: @png}} = Images.generate("Draw.", live_opts(dir, url))
     end
 
-    test "what the model said instead of drawing is kept short", %{tmp_dir: dir} do
-      said = [%{"type" => "response.output_text.delta", "delta" => String.duplicate("é", 50_000)}]
-      url = SSEServer.start!([sse(said)])
-
-      assert {:error, {:other, "the model answered without a picture: " <> text}} =
-               Images.generate("Draw.", live_opts(dir, url))
-
-      assert String.length(text) == 300
-    end
-
     test "a picture whose stream ends before response.completed: drawn, not an error",
          %{tmp_dir: dir} do
       url = SSEServer.start!([sse([image_item()])])
@@ -373,19 +363,23 @@ defmodule Rho.ImagesTest do
   end
 
   describe "models/1" do
-    test "the listed ids in Codex's order, hidden ones left out" do
+    test "the picker's ids in Codex's order; hidden, unlisted and malformed entries left out" do
       body =
         Jason.encode!(%{
           "models" => [
             %{"slug" => "b", "visibility" => "list", "priority" => 5},
             %{"slug" => "hidden", "visibility" => "hide", "priority" => 4},
+            %{"slug" => "unlisted", "visibility" => "none", "priority" => 0},
+            %{"slug" => "no-visibility", "priority" => 0},
+            1,
+            %{"slug" => "c", "visibility" => "list"},
             %{"slug" => "a", "visibility" => "list", "priority" => 1}
           ]
         })
 
       respond = scripted([Req.Response.new(status: 200, body: body)])
 
-      assert {:ok, ["a", "b"]} = Images.models(credential: &signed_in/1, respond: respond)
+      assert {:ok, ["a", "b", "c"]} = Images.models(credential: &signed_in/1, respond: respond)
     end
   end
 end

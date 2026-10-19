@@ -55,7 +55,7 @@ defmodule Rho.Images do
   # current release on 2026-10-18): the endpoint lists the models a client
   # of that version may use, so it needs one (an old one gets fewer models,
   # a very old one none). `:client_version` overrides it.
-  @client_version "0.160.1"
+  @client_version "0.163.0"
   @originator "codex_cli_rs"
   @formats %{"png" => "image/png", "jpeg" => "image/jpeg", "webp" => "image/webp"}
   @instructions """
@@ -162,20 +162,26 @@ defmodule Rho.Images do
     end
   end
 
+  # The picker's models (visibility "list"), by priority; anything else in
+  # the list is skipped.
   defp listed(body) do
     case Jason.decode(body) do
       {:ok, %{"models" => models}} when is_list(models) ->
         {:ok,
-         for(
-           %{"slug" => slug} = m <- Enum.sort_by(models, &(&1["priority"] || 1_000)),
-           is_binary(slug) and m["visibility"] != "hide",
-           do: slug
-         )}
+         models
+         |> Enum.filter(
+           &match?(%{"slug" => slug, "visibility" => "list"} when is_binary(slug), &1)
+         )
+         |> Enum.sort_by(&priority/1)
+         |> Enum.map(& &1["slug"])}
 
       _ ->
         {:error, {:other, "Codex's model list wasn't JSON with models"}}
     end
   end
+
+  defp priority(%{"priority" => p}) when is_number(p), do: p
+  defp priority(_model), do: 1_000
 
   # The account refused `model`: draw once with the model Codex itself
   # uses by default (the first it lists), which is what draws in Codex.
