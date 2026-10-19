@@ -1,0 +1,396 @@
+defmodule Rho.Images do
+  @moduledoc """
+  Pictures drawn on the user's ChatGPT sign-in (`:openai_codex`, ChatGPT
+  Plus/Pro), as Codex draws them: the Responses API at
+  `https://chatgpt.com/backend-api/codex/responses` with OpenAI's hosted
+  `image_generation` tool (gpt-image), forced with `tool_choice`, the
+  picture coming back base64 in the stream's `image_generation_call` item.
+  The drawing counts against the subscription's Codex limits; there is no
+  API key and no per-picture bill.
+
+  This is a focused Req call, not req_llm: req_llm's `openai_codex`
+  provider (1.26 to 1.28) drops a finished `image_generation_call` item,
+  so the picture never reaches the response, and for the gpt-5.6 models it
+  sends Codex's "responses lite" contract, which strips hosted tools such
+  as `image_generation` from the request. An API-key image model
+  (gpt-image on `:openai`, Gemini on `:google`) is req_llm's
+  `ReqLLM.generate_image/3`.
+
+  A text model drives the tool (it reads the prompt and the reference
+  pictures and writes the tool's prompt, returned as `revised_prompt`):
+  `:model` (default #{inspect("gpt-5.6-luna")}, the lightest of Codex's
+  models that drew in testing, 2026-10-18). The ChatGPT account accepts
+  only the models Codex lists for it (`models/1`, Codex's own
+  `GET /backend-api/codex/models`); gpt-5.5 and gpt-image-2 are refused
+  with a 400 ("not supported when using Codex with a ChatGPT account").
+  When the account refuses the model, `generate/2` asks that list once and
+  draws with the last model it lists (Codex lists its lightest last).
+
+  Every call that reached the provider is recorded with `Rho.Usage` as a
+  call to `"openai_codex:<model>"`: its tokens, the subscription windows
+  its headers report, and a 429's reset. Errors are `t:Rho.LLM.error/0`,
+  so `Rho.LLM.describe/1` says them: `{:signed_out, :openai_codex}`, a
+  dead sign-in (`{:auth, …}`), `{:rate_limited, limit}` with the window
+  and when it resets, `{:http, status, message}`, `{:transport, reason}`,
+  `{:other, message}` (no picture: a refusal, the model's own words).
+  The access token goes only into the request's `authorization` header.
+
+  Runs in the caller's process and takes as long as the drawing does
+  (20–60 s); call it from a tool's task, never from a loop's process.
+  """
+
+  alias Rho.Auth
+  alias Rho.LLM.ReqLLM, as: Adapter
+  alias Rho.Usage
+
+  @base_url "https://chatgpt.com/backend-api/codex"
+  @default_model "gpt-5.6-luna"
+  # The Codex CLI version whose model list `models/1` asks for: the
+  # endpoint lists the models a client of that version may use (it needs
+  # `client_version`; an old one gets an empty list).
+  @client_version "0.154.0"
+  @originator "codex_cli_rs"
+  @formats %{"png" => "image/png", "jpeg" => "image/jpeg", "webp" => "image/webp"}
+  @instructions """
+  Draw the picture the user describes with the image_generation tool. When \
+  the user gives a picture, draw from it: change it as asked, or keep its look.\
+  """
+  # A drawing streams nothing while the picture renders.
+  @receive_timeout 240_000
+
+  @type picture :: %{
+          mime: String.t(),
+          bytes: binary(),
+          revised_prompt: String.t() | nil,
+          size: String.t() | nil,
+          action: String.t() | nil,
+          model: String.t(),
+          usage: map() | nil
+        }
+
+  @doc """
+  Draws `prompt` on the ChatGPT sign-in: `{:ok, picture}` with the image's
+  `mime` and `bytes`, the tool's `revised_prompt`, the `size` it drew at
+  (`"1536x1024"`), its `action` (`"generate"`, or `"edit"` when it drew
+  from a reference) and the driving `model`, or `{:error, t:Rho.LLM.error/0}`.
+
+  Options:
+
+    * `:references`: pictures to draw from, `[{mime, bytes}]`
+    * `:size`: `"1024x1024"`, `"1536x1024"`, `"1024x1536"` or `"auto"`
+      (the tool's default); an edit may keep its reference's shape instead
+    * `:quality`: `"low"`, `"medium"`, `"high"` or `"auto"` (the default)
+    * `:format`: `"png"` (the default), `"jpeg"` or `"webp"`
+    * `:model`: the Codex model that drives the tool (see the moduledoc)
+    * tests: `:credential` (as `Rho.Auth.credential/1`), `:respond` (the
+      fake `Req.Response` for each `Req.Request`), `:base_url`, `:data_dir`
+      (where usage is recorded, default `Rho.Config.data_dir/0`), `:now`
+  """
+  @spec generate(String.t(), keyword()) :: {:ok, picture()} | {:error, Rho.LLM.error()}
+  def generate(prompt, opts \\ []) when is_binary(prompt) do
+    credential = Keyword.get(opts, :credential, &Auth.credential/1)
+
+    with {:ok, auth} <- Adapter.credential(:openai_codex, credential) do
+      model = Keyword.get(opts, :model, @default_model)
+
+      case draw(model, prompt, auth, opts) do
+        {:error, {:refused_model, message}} -> fallback(model, message, prompt, auth, opts)
+        result -> result
+      end
+    end
+  end
+
+  @doc """
+  The model ids the ChatGPT account may use with Codex, in Codex's order
+  (its picker's, by priority), hidden ones left out: Codex's
+  `GET /backend-api/codex/models`. Takes `generate/2`'s `:credential`,
+  `:respond` and `:base_url`.
+  """
+  @spec models(keyword()) :: {:ok, [String.t()]} | {:error, Rho.LLM.error()}
+  def models(opts \\ []) do
+    credential = Keyword.get(opts, :credential, &Auth.credential/1)
+
+    with {:ok, auth} <- Adapter.credential(:openai_codex, credential) do
+      req =
+        request(opts,
+          method: :get,
+          url: "/models",
+          params: [client_version: @client_version],
+          headers: headers(auth, "application/json"),
+          receive_timeout: 15_000
+        )
+
+      case Req.request(req) do
+        {:ok, %Req.Response{status: 200, body: body}} ->
+          listed(body)
+
+        {:ok, %Req.Response{status: status, body: body}} ->
+          {:error, {:http, status, error_text(body)}}
+
+        {:error, e} ->
+          {:error, Adapter.normalize(e)}
+      end
+    end
+  end
+
+  defp listed(body) do
+    case Jason.decode(body) do
+      {:ok, %{"models" => models}} when is_list(models) ->
+        {:ok,
+         for(
+           %{"slug" => slug} = m <- Enum.sort_by(models, &(&1["priority"] || 1_000)),
+           is_binary(slug) and m["visibility"] != "hide",
+           do: slug
+         )}
+
+      _ ->
+        {:error, {:other, "Codex's model list wasn't JSON with models"}}
+    end
+  end
+
+  # The account refused `model`: draw with the lightest model Codex lists
+  # for it, once.
+  defp fallback(model, message, prompt, auth, opts) do
+    case models(opts) do
+      {:ok, listed} when listed != [] ->
+        case List.last(listed) do
+          ^model -> {:error, {:http, 400, message}}
+          other -> other |> draw(prompt, auth, opts) |> refused_as_http()
+        end
+
+      _ ->
+        {:error, {:http, 400, message}}
+    end
+  end
+
+  defp refused_as_http({:error, {:refused_model, message}}), do: {:error, {:http, 400, message}}
+  defp refused_as_http(result), do: result
+
+  defp draw(model, prompt, auth, opts) do
+    format = opts |> Keyword.get(:format, "png") |> to_string()
+    spec = "openai_codex:" <> model
+
+    req =
+      request(opts,
+        method: :post,
+        url: "/responses",
+        headers: headers(auth, "text/event-stream"),
+        json: body(model, prompt, format, opts),
+        receive_timeout: @receive_timeout
+      )
+
+    case Req.request(req) do
+      {:ok, %Req.Response{status: 200} = resp} ->
+        stream_result(model, resp, opts)
+
+      {:ok, %Req.Response{status: status, headers: headers, body: body}} ->
+        failed(spec, status, headers, body, opts)
+
+      {:error, e} ->
+        {:error, Adapter.normalize(e)}
+    end
+  end
+
+  defp body(model, prompt, format, opts) do
+    tool =
+      %{
+        "type" => "image_generation",
+        "size" => opts[:size],
+        "quality" => opts[:quality],
+        "output_format" => format
+      }
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+    pictures =
+      for {mime, bytes} <- Keyword.get(opts, :references, []) do
+        %{"type" => "input_image", "image_url" => "data:#{mime};base64,#{Base.encode64(bytes)}"}
+      end
+
+    %{
+      "model" => model,
+      "instructions" => @instructions,
+      "input" => [
+        %{
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => prompt} | pictures]
+        }
+      ],
+      "tools" => [tool],
+      "tool_choice" => %{"type" => "image_generation"},
+      "store" => false,
+      "stream" => true
+    }
+  end
+
+  defp request(opts, req_opts) do
+    req =
+      Req.new(
+        [
+          base_url: Keyword.get(opts, :base_url, @base_url),
+          retry: false,
+          decode_body: false,
+          connect_options: [timeout: 15_000]
+        ] ++ req_opts
+      )
+
+    case opts[:respond] do
+      nil -> req
+      respond -> Req.Request.append_request_steps(req, respond: &{&1, respond.(&1)})
+    end
+  end
+
+  defp headers(auth, accept) do
+    [
+      {"authorization", "Bearer #{auth.token}"},
+      {"originator", @originator},
+      {"accept", accept}
+    ] ++ if(auth[:account_id], do: [{"chatgpt-account-id", auth.account_id}], else: [])
+  end
+
+  # ── the stream ──
+
+  defp stream_result(model, resp, opts) do
+    spec = "openai_codex:" <> model
+    events = events(resp.body)
+    usage = Enum.find_value(events, &completed_usage/1)
+    error = Enum.find_value(events, &stream_error/1)
+    picture = Enum.find_value(events, &picture/1)
+
+    record(spec, %{status: 200, headers: resp.headers, usage: usage(usage), error: error}, opts)
+
+    case {picture, error} do
+      {%{} = picture, _} ->
+        {:ok, Map.merge(picture, %{model: model, usage: usage})}
+
+      {nil, error} when is_binary(error) ->
+        {:error, {:other, error}}
+
+      {nil, nil} ->
+        {:error, {:other, no_picture(events)}}
+    end
+  end
+
+  # `data:` lines of server-sent events, decoded; what isn't JSON is skipped.
+  defp events(body) when is_binary(body) do
+    for line <- String.split(body, "\n"),
+        "data:" <> data <- [String.trim_trailing(line, "\r")],
+        {:ok, %{} = event} <- [Jason.decode(String.trim(data))],
+        do: event
+  end
+
+  defp events(_body), do: []
+
+  defp picture(%{
+         "type" => "response.output_item.done",
+         "item" => %{"type" => "image_generation_call", "result" => result} = item
+       })
+       when is_binary(result) and result != "" do
+    case Base.decode64(result) do
+      {:ok, bytes} ->
+        %{
+          mime: Map.get(@formats, item["output_format"], "image/png"),
+          bytes: bytes,
+          revised_prompt: item["revised_prompt"],
+          size: item["size"],
+          action: item["action"]
+        }
+
+      :error ->
+        nil
+    end
+  end
+
+  defp picture(_event), do: nil
+
+  defp completed_usage(%{"type" => "response.completed", "response" => %{"usage" => %{} = u}}),
+    do: u
+
+  defp completed_usage(_event), do: nil
+
+  defp stream_error(%{"type" => "error"} = event), do: message(event) || "the drawing failed"
+
+  defp stream_error(%{"type" => type, "response" => response})
+       when type in ["response.failed", "response.incomplete"] do
+    message(response["error"]) || reason(response["incomplete_details"]) ||
+      "the drawing failed (#{type})"
+  end
+
+  defp stream_error(_event), do: nil
+
+  defp message(%{"message" => m}) when is_binary(m), do: String.slice(m, 0, 300)
+  defp message(%{"error" => %{} = e}), do: message(e)
+  defp message(_), do: nil
+
+  defp reason(%{"reason" => r}) when is_binary(r), do: "the drawing stopped: #{r}"
+  defp reason(_), do: nil
+
+  # No picture and no error: what the model said instead (a refusal).
+  defp no_picture(events) do
+    text =
+      events
+      |> Enum.filter(&(&1["type"] == "response.output_text.delta"))
+      |> Enum.map_join(&to_string(&1["delta"]))
+      |> String.trim()
+
+    if text == "",
+      do: "the model answered without a picture",
+      else: "the model answered without a picture: " <> String.slice(text, 0, 300)
+  end
+
+  # Req LLM's usage keys, as `Rho.Session.usage/1` reads them.
+  defp usage(%{} = u) do
+    %{
+      input_tokens: u["input_tokens"] || 0,
+      output_tokens: u["output_tokens"] || 0,
+      cached_tokens: get_in(u, ["input_tokens_details", "cached_tokens"]) || 0
+    }
+  end
+
+  defp usage(nil), do: nil
+
+  # ── failures ──
+
+  defp failed(spec, status, headers, body, opts) do
+    json =
+      case Jason.decode(to_string(body)) do
+        {:ok, %{} = json} -> json
+        _ -> nil
+      end
+
+    message = error_text(body)
+    record(spec, %{status: status, headers: headers, body: json, error: message}, opts)
+
+    cond do
+      status == 400 and refused_model?(message) ->
+        {:error, {:refused_model, message}}
+
+      status == 429 ->
+        dir = Keyword.get_lazy(opts, :data_dir, &Rho.Config.data_dir/0)
+        now = Keyword.get_lazy(opts, :now, fn -> System.os_time(:second) end)
+        {:error, Adapter.limit({:http, 429, message}, spec, headers, json, Usage.load(dir), now)}
+
+      true ->
+        {:error, {:http, status, message}}
+    end
+  end
+
+  defp refused_model?(message),
+    do: String.contains?(message, "not supported when using Codex with a ChatGPT account")
+
+  # The provider's own message, bounded; the status alone when it has none.
+  defp error_text(body) do
+    case Jason.decode(to_string(body)) do
+      {:ok, %{"error" => %{"message" => m}}} when is_binary(m) -> String.slice(m, 0, 300)
+      {:ok, %{"error" => m}} when is_binary(m) -> String.slice(m, 0, 300)
+      {:ok, %{"detail" => m}} when is_binary(m) -> String.slice(m, 0, 300)
+      _ -> "no message"
+    end
+  end
+
+  defp record(spec, call, opts) do
+    case opts[:data_dir] do
+      nil -> Adapter.record(spec, call)
+      dir -> Usage.record(dir, spec, call)
+    end
+  end
+end

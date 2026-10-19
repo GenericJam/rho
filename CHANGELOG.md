@@ -6,6 +6,26 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Pictures on the ChatGPT sign-in** (`Rho.Images.generate/2`): the
+  user's ChatGPT Plus/Pro sign-in (`:openai_codex`) draws a picture as
+  Codex does, through the Codex Responses endpoint with OpenAI's hosted
+  `image_generation` tool, from words and optional reference pictures
+  (an edit). It returns the bytes, type, the tool's revised prompt, size
+  and action; options `:size`, `:quality`, `:format`, `:references`,
+  `:model`. No API key and no per-picture bill: it counts against the
+  subscription's Codex limits, recorded in `Rho.Usage` like a model call
+  (tokens, windows, a 429's reset). Errors are `Rho.LLM.error/0`s. A
+  focused Req call: req_llm's `openai_codex` provider drops the
+  `image_generation_call` item and, for the gpt-5.6 models, strips hosted
+  tools from the request.
+- `Rho.Images.models/1`: the Codex models the ChatGPT account may use
+  (Codex's `GET /backend-api/codex/models`). The driving model defaults
+  to `gpt-5.6-luna`; when the account refuses a model (gpt-5.5 and
+  gpt-image-2 are refused), `generate/2` draws once with the last model
+  that list gives.
+
 ## [0.3.1] - 2026-10-18
 
 ### Fixed
