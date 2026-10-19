@@ -127,7 +127,14 @@ defmodule Rho.Models.Codex do
   """
   @spec replaced_notice(String.t(), String.t(), keyword()) :: String.t()
   def replaced_notice(from, to, opts \\ []) do
-    known = models(opts) ++ @shipped
+    # Unfiltered: the refused model is named from the list that offered it.
+    listed =
+      case fetched(dir(opts)) do
+        %{models: models} -> models
+        nil -> []
+      end
+
+    known = listed ++ @shipped
 
     "#{name(from, known)} isn't offered on the ChatGPT sign-in any more; " <>
       "using #{name(to, known)} instead."
