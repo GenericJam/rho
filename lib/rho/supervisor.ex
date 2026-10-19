@@ -18,7 +18,11 @@ defmodule Rho.Supervisor do
 
     * `:tools`, `:tool_sources`: `Rho.ToolRegistry`'s (default from
       `config :rho`, else `Rho.ToolRegistry.builtin_tools/0` and none)
-    * `:auth`, `:login`: start options of `Rho.Auth` / `Rho.Auth.Login`
+    * `:auth`, `:login`: start options of `Rho.Auth` / `Rho.Auth.Login`;
+      `auth: false` starts neither, for a host whose credentials aren't
+      the node's (each account's in a `Rho.Auth.Vault`, passed to its
+      loops: then `Rho.Auth.credential/1` answers `{:error, :signed_out}`
+      for whatever the credential store doesn't hold)
     * `:llm_catalog`: install rho's trimmed model catalog
       (`Rho.LLMCatalog.install!/0`) before anything looks a model up;
       default `true`
@@ -43,10 +47,7 @@ defmodule Rho.Supervisor do
     dyn = dyn(Keyword.get_lazy(opts, :dyn, &Dyn.Config.enabled?/0))
 
     children =
-      [
-        {Rho.Auth, Keyword.get(opts, :auth, [])},
-        {Rho.Auth.Login, Keyword.get(opts, :login, [])}
-      ] ++
+      auth_children(opts) ++
         dyn_children(dyn) ++
         [
           {Rho.ToolRegistry, registry_opts(opts, dyn)},
@@ -56,6 +57,13 @@ defmodule Rho.Supervisor do
         ]
 
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  defp auth_children(opts) do
+    case Keyword.get(opts, :auth, []) do
+      false -> []
+      auth -> [{Rho.Auth, auth}, {Rho.Auth.Login, Keyword.get(opts, :login, [])}]
+    end
   end
 
   defp dyn(true), do: []

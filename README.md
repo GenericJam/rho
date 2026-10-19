@@ -170,7 +170,8 @@ them all):
 | `:app_name`, `:hints` (where the user signs in or switches model, in messages; how they approve a Dyn generation, in the agent's Dyn text) | "the app", "the app's settings", "on the phone with the screen lock" | |
 | Attachments (`t:Rho.Session.attachment/0`: pictures, text, PDFs with a user message) | none: the host builds them from its pickers and camera | |
 | `:resolve_attachment` (`fn attachment, ctx -> {:ok, {mime, bytes}} \| {:error, reason} end` or an MFA): the bytes of a file attached by reference (`ref:` in an attachment, or a tool's `%{ref: …}` picture), whose session entry keeps only the ref and metadata | none: a referenced file reaches the model as a note | the app's materials store |
-| Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM` | |
+| Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client, `:data_dir` (where its usage is recorded and read) | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM`; `:data_dir` | |
+| Whose sign-ins a loop uses: `llm: {Rho.LLM.ReqLLM, credential: fun, status: fun}` (as `Rho.Auth.credential/1` and `status/0` answer), read by its model calls, compaction, consults, `ask_model` and the fallback check | the node's (`Rho.Auth`) | |
 | `:consult_models` (a list of specs, or a function / MFA returning one): the models `Rho.Consult` and `ask_model` may consult | every catalog model of a signed-in provider | the app's settings |
 | `:consult_system` (`%{purpose => text}`, or a function / MFA given the purpose): a consulted model's system prompt | rho's for the purpose | the app's critic brief |
 | `:dyn` (`Rho.Dyn.Config`): the Dyn layer and its seams, below | off | on, with mob screens |
@@ -180,6 +181,38 @@ Anthropic, OpenAI and Google (`Rho.LLMCatalog`), on every platform: a
 phone doesn't ship llm_db's packaged one, and the trimmed one loads fast.
 A host that uses llm_db (or req_llm) for other providers starts it with
 `llm_catalog: false`.
+
+### Several accounts on one server
+
+A host whose users keep their sign-ins elsewhere (a website whose
+accounts are phones) starts rho without the node's sign-ins and keeps
+each account's credentials in memory, in a `Rho.Auth.Vault`:
+
+```elixir
+{Rho.Supervisor, tools: tools, auth: false}
+
+{:ok, vault} =
+  Rho.Auth.Vault.start_link(
+    # rho refreshed a sign-in: send it back to where the account keeps it
+    on_refresh: fn provider, creds -> MyApp.Link.rotated(account, provider, creds) end,
+    # or ask that place to refresh it ({:ok, creds}), else :local
+    refresher: fn provider -> MyApp.Link.refresh(account, provider) end
+  )
+
+:ok = Rho.Auth.Vault.put(vault, :anthropic, creds_from_the_phone)
+
+Rho.start_loop(
+  data_dir: account_dir,
+  llm:
+    {Rho.LLM.ReqLLM,
+     credential: &Rho.Auth.Vault.credential(vault, &1),
+     status: fn -> Rho.Auth.Vault.status(vault) end}
+)
+```
+
+`Rho.Session.size/1`, `read_from/3` and `append_bytes/3` keep a copy of
+a session file in step by byte offset (whole lines, idempotent on a
+resend), so a host never reimplements the file layout.
 
 ## Dyn: code the agent writes on the device
 

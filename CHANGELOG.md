@@ -6,6 +6,52 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-19
+
+Credentials per account, for a host serving several (a website whose
+accounts are phones). A host with one set of sign-ins changes nothing.
+
+### Added
+
+- **`Rho.Auth.Vault`**: one account's credentials in memory only (never
+  on disk), with `Rho.Auth`'s API (`put/3`, `put_api_key/3`, `delete/2`,
+  `get/2`, `signed_in?/2`, `status/1`, `credential/2`, `subscribe/1`) and
+  its rules for a rotating refresh token: one refresh per provider at a
+  time, a put wins over a refresh in flight, a refreshed sign-in handed
+  out only once kept. `:on_refresh` (`fn provider, creds -> :ok |
+  {:error, reason}`) is told of every refresh rho did, before anyone gets
+  the token; `:refresher` (`fn provider -> {:ok, creds} | :local`) lets
+  whoever holds the account refresh it instead (20 s, then the vault
+  does). Both share one implementation with `Rho.Auth`.
+- **A loop's own sign-ins**: `Rho.LLM.ReqLLM` honours its `:credential`
+  option (`llm: {Rho.LLM.ReqLLM, credential: fun}`; the default is
+  `Rho.Auth.credential/1`), so turns, compaction and consults use it, and
+  its `:status` option says who is signed in for the loop
+  (`Rho.LLM.status/1`), read by the fallback check and `ask_model`.
+- `Rho.Consult.models/1` and `allowed/2` take a status function (default
+  `Rho.Auth.status/0`).
+- `Rho.Supervisor` option `auth: false`: neither `Rho.Auth` nor
+  `Rho.Auth.Login` is started; `Rho.Auth.credential/1` then answers
+  `{:error, :signed_out}` for what the credential store doesn't hold.
+- `Rho.Session.size/1`, `read_from/3` and `append_bytes/3`: a session
+  file's whole lines by byte offset, to keep a copy in step (idempotent on
+  a resend, `{:error, {:conflict, size}}` when the copies diverged).
+- A request (`t:Rho.LLM.request/0`) carries the loop's or consult's
+  `:data_dir`.
+
+### Changed
+
+- A model call's usage is recorded in, and a 429 reads, the loop's (or
+  consult's) `:data_dir` instead of always `Rho.Config.data_dir/0`; the
+  default fallback check reads the loop's too.
+- `Rho.LLM.usable/2` takes options (`:status`, `:data_dir`, `:now`)
+  instead of `usable(model, dir, now)`. The loop's `:fallback_check`
+  default is now `:usable` (that, over the loop's data dir and status).
+- `Rho.Auth` subscribers also get `{:rho_auth, :changed}` after a
+  refresh that worked (a phone tells its linked computers from it).
+- A put or delete during a refresh stops the refresh (its result was
+  dropped already), so one not yet sent never spends the refresh token.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added
@@ -209,7 +255,8 @@ can share it.
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
 
-[Unreleased]: https://github.com/GenericJam/rho/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/GenericJam/rho/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/GenericJam/rho/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/GenericJam/rho/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/GenericJam/rho/compare/v0.2.0...v0.3.0

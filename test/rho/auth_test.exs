@@ -150,12 +150,15 @@ defmodule Rho.AuthTest do
     assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o600
   end
 
-  test "a token near expiry is refreshed first and the rotated refresh token stored" do
+  test "a token near expiry is refreshed first, the rotated refresh token stored, and announced" do
     start_supervised!({Auth, respond: endpoint()})
     :ok = Auth.put(:anthropic, creds(%{"expires" => now() + 60_000, "email" => "k@example.com"}))
+    :ok = Auth.subscribe()
 
     assert {:ok, %{token: "at-2"}} = Auth.credential(:anthropic)
     assert_received {:refresh_request, %{"refresh_token" => "rt-1"}}
+    # a phone tells its linked computers of the rotated sign-in from this
+    assert_received {:rho_auth, :changed}
 
     assert {:ok, %{"access" => "at-2", "refresh" => "rt-2", "email" => "k@example.com"} = stored} =
              Auth.get(:anthropic)
@@ -189,6 +192,11 @@ defmodule Rho.AuthTest do
     assert Enum.uniq(results) == [{:ok, %{type: :oauth, token: "at-2", account_id: nil}}]
     assert_received {:refresh_request, _}
     refute_received {:refresh_request, _}
+  end
+
+  test "not started (a host with per-account vaults): nobody is signed in" do
+    refute Process.whereis(Auth)
+    assert Auth.credential(:anthropic) == {:error, :signed_out}
   end
 
   test "a failed refresh is an error that keeps the sign-in, and is announced" do

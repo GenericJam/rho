@@ -12,7 +12,11 @@ defmodule Rho.Test.LoopHelpers do
 
   def model, do: @model
 
-  @doc "Starts a subscribed loop in a fresh session under `dir`. Returns `%{loop, llm, session, dir}`."
+  @doc """
+  Starts a subscribed loop in a fresh session under `dir`. Returns `%{loop,
+  llm, session, dir}`. `:llm_opts` go to the fake with its script
+  (`[fake: llm] ++ llm_opts`), as a loop's `:llm` options would.
+  """
   def start_loop(dir, script, opts \\ []) do
     {:ok, llm} = FakeLLM.start(script)
     sup = start_supervised!(Task.Supervisor, id: make_ref())
@@ -24,7 +28,7 @@ defmodule Rho.Test.LoopHelpers do
       [
         session: session,
         entries: entries,
-        llm: {FakeLLM, llm},
+        llm: llm_spec(llm, opts[:llm_opts]),
         tools: [
           Rho.Test.Tools.Echo,
           Rho.Test.Tools.Crash,
@@ -36,12 +40,15 @@ defmodule Rho.Test.LoopHelpers do
         data_dir: dir,
         system_prompt: "test",
         retry_base_ms: 1
-      ] ++ Keyword.drop(opts, [:session])
+      ] ++ Keyword.drop(opts, [:session, :llm_opts])
 
     loop = start_supervised!({Loop, loop_opts}, id: make_ref())
     :ok = Loop.subscribe(loop)
     %{loop: loop, llm: llm, session: session, dir: dir}
   end
+
+  defp llm_spec(llm, nil), do: {FakeLLM, llm}
+  defp llm_spec(llm, opts), do: {FakeLLM, [fake: llm] ++ opts}
 
   @doc "Events up to and including `agent_end`."
   def collect(timeout \\ 2_000), do: collect([], timeout)

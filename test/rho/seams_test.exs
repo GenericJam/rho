@@ -218,5 +218,20 @@ defmodule Rho.SeamsTest do
       %{path: path} = Loop.snapshot(loop)
       assert Path.dirname(path) == Path.join(dir, "sessions")
     end
+
+    test "auth: false starts no node sign-in processes, and loops still run", %{tmp_dir: dir} do
+      put_env(:data_dir, dir)
+      {:ok, llm} = FakeLLM.start([[{:text, "ok"}]])
+      start_supervised!({Rho.Supervisor, tools: [], auth: false, llm_catalog: false})
+
+      refute Process.whereis(Rho.Auth)
+      refute Process.whereis(Rho.Auth.Login)
+      assert Rho.Auth.credential(:anthropic) == {:error, :signed_out}
+
+      {:ok, loop} = Rho.start_loop(llm: {FakeLLM, llm}, system_prompt: "t")
+      :ok = Loop.subscribe(loop)
+      :ok = Loop.prompt(loop, "go")
+      assert_receive {:rho, _, %{type: :agent_end, reason: :done}}, 2_000
+    end
   end
 end

@@ -25,16 +25,23 @@ defmodule Rho.Auth do
   the spent token) and callers get `{:error, {:store_failed, reason}}` until
   they are saved. A `put/2` or `delete/1` takes effect only once written;
   then it wins over a refresh in flight. Subscribers (`subscribe/0`) get
-  `{:rho_auth, :changed}` on every `put/2`, `delete/1` and failed
-  refresh or save.
+  `{:rho_auth, :changed}` on every `put/2`, `delete/1`, refresh (done or
+  failed) and failed save.
 
   Reads (`get/1`, `status/0`, a key or a fresh token from `credential/1`)
   don't go through the process. Secrets are never logged. Options (tests):
   `:respond` answers the token endpoint instead of the network
   (`Rho.Auth.OAuthFlow`), `:save_retry_ms` (5 s).
-  """
-  use GenServer
 
+  This is the node's one set of credentials. A host serving several
+  accounts (a website whose users' sign-ins live on their phones) keeps
+  each account's in a `Rho.Auth.Vault` instead and starts `Rho.Supervisor`
+  with `auth: false`; without this process `credential/1` answers
+  `{:error, :signed_out}` for anything the store doesn't hold.
+  """
+  @behaviour Rho.Auth.Keeper
+
+  alias Rho.Auth.Keeper
   alias Rho.Auth.OAuthFlow
   alias Rho.CredentialStore
 
@@ -45,18 +52,27 @@ defmodule Rho.Auth do
   @type credential ::
           %{type: :oauth, token: String.t(), account_id: String.t() | nil}
           | %{type: :api_key, key: String.t()}
+  @type status :: %{
+          provider() => %{
+            signed_in: boolean(),
+            type: :oauth | :api_key | nil,
+            email: String.t() | nil,
+            expires: integer() | nil
+          }
+        }
 
   @providers [:anthropic, :openai_codex, :openai, :google]
   @oauth_providers [:anthropic, :openai_codex]
   @api_key_providers [:anthropic, :openai, :google]
-  @refresh_margin_ms 5 * 60_000
-  # Longer than a refresh's own timeouts (30 s) plus a queued one.
-  @refresh_call_ms 75_000
-  @save_retry_ms 5_000
+
+  @doc false
+  def child_spec(opts),
+    do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
   @doc "Started by `Rho.Supervisor` (its `:auth` option holds `opts`, see the moduledoc)."
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts \\ []),
+    do: Keeper.start_link(__MODULE__, Keyword.take(opts, [:respond]), opts, name: __MODULE__)
 
   @doc "Every provider rho can sign in to, in display order."
   @spec providers() :: [provider()]
@@ -98,7 +114,7 @@ defmodule Rho.Auth do
   """
   @spec put(provider(), creds()) :: :ok | {:error, term()}
   def put(provider, creds) when provider in @providers do
-    if valid?(provider, creds),
+    if Keeper.valid?(provider, creds),
       do: GenServer.call(__MODULE__, {:put, provider, creds}),
       else: {:error, :invalid_credentials}
   end
@@ -150,31 +166,8 @@ defmodule Rho.Auth do
   Per provider: whether it has a credential, which kind, and for a
   sign-in its email and expiry.
   """
-  @spec status() :: %{
-          provider() => %{
-            signed_in: boolean(),
-            type: :oauth | :api_key | nil,
-            email: String.t() | nil,
-            expires: integer() | nil
-          }
-        }
-  def status do
-    Map.new(@providers, fn provider ->
-      case get(provider) do
-        {:ok, creds} ->
-          {provider,
-           %{
-             signed_in: true,
-             type: kind(creds),
-             email: creds["email"],
-             expires: creds["expires"]
-           }}
-
-        :error ->
-          {provider, %{signed_in: false, type: nil, email: nil, expires: nil}}
-      end
-    end)
-  end
+  @spec status() :: status()
+  def status, do: Keeper.status(&get/1)
 
   @doc """
   What a model call needs: `%{type: :api_key, key}`, or for a sign-in a
@@ -193,7 +186,7 @@ defmodule Rho.Auth do
   def credential(provider) when provider in @providers do
     case get(provider) do
       {:ok, creds} ->
-        if fresh?(creds), do: {:ok, token(creds)}, else: via_server(provider)
+        if Keeper.fresh?(creds), do: {:ok, Keeper.token(creds)}, else: via_server(provider)
 
       # A refreshed sign-in waiting to be saved lives only in the server.
       :error ->
@@ -212,255 +205,58 @@ defmodule Rho.Auth do
   @spec subscribe() :: :ok
   def subscribe, do: GenServer.call(__MODULE__, {:subscribe, self()})
 
+  # Not started (`Rho.Supervisor`'s `auth: false`): nobody here is signed in.
   defp via_server(provider) do
-    GenServer.call(__MODULE__, {:credential, provider}, @refresh_call_ms)
+    if Process.whereis(__MODULE__),
+      do: GenServer.call(__MODULE__, {:credential, provider}, Keeper.refresh_call_ms()),
+      else: {:error, :signed_out}
   catch
     :exit, reason ->
       {:error, {:refresh_failed, "the sign-in service didn't answer (#{inspect(reason)})"}}
   end
 
-  # ── GenServer ──
+  # ── Rho.Auth.Keeper: the credential store ──
 
-  @impl true
-  def init(opts) do
-    {:ok,
-     %{
-       subscribers: %{},
-       refreshing: %{},
-       # provider => %{creds, reason, timer}: refreshed, not yet saved
-       unsaved: %{},
-       respond: opts[:respond],
-       save_retry_ms: Keyword.get(opts, :save_retry_ms, @save_retry_ms)
-     }}
-  end
+  @impl Keeper
+  def read(_opts, provider), do: get(provider)
 
-  # A replacement that didn't save changes nothing: a refresh in flight
-  # (or one waiting to be saved) stays the sign-in.
-  @impl true
-  def handle_call({:put, provider, creds}, _from, s) do
-    case store(provider, creds) do
-      :ok -> {:reply, :ok, s |> supersede(provider) |> broadcast()}
-      {:error, _} = error -> {:reply, error, s}
+  @impl Keeper
+  def write(opts, provider, creds, _origin) do
+    case CredentialStore.put(account(provider), Jason.encode!(creds)) do
+      :ok -> {:ok, opts}
+      {:error, _} = error -> error
     end
   end
 
-  def handle_call({:delete, provider}, _from, s) do
+  @impl Keeper
+  def remove(opts, provider) do
     case CredentialStore.delete(account(provider)) do
-      :ok ->
-        {:reply, :ok, s |> supersede(provider) |> broadcast()}
-
-      {:error, reason} = error ->
-        Logger.error("[auth] deleting #{provider} failed: #{inspect(reason)}")
-        {:reply, error, s}
+      :ok -> {:ok, opts}
+      {:error, _} = error -> error
     end
   end
 
-  def handle_call({:subscribe, pid}, _from, s) do
-    subscribers = Map.put_new_lazy(s.subscribers, pid, fn -> Process.monitor(pid) end)
-    {:reply, :ok, %{s | subscribers: subscribers}}
-  end
-
-  def handle_call({:credential, provider}, from, s), do: {:noreply, serve(s, provider, [from])}
-
-  @impl true
-  def handle_info({:refreshed, provider, result}, s) do
-    case s.refreshing[provider] do
-      %{ref: ref} ->
-        Process.demonitor(ref, [:flush])
-        {:noreply, refresh_done(s, provider, result)}
-
-      nil ->
-        {:noreply, s}
-    end
-  end
-
-  def handle_info({:save, provider}, s), do: {:noreply, save_unsaved(s, provider)}
-
-  def handle_info({:DOWN, ref, :process, pid, reason}, s) do
-    case Enum.find(s.refreshing, fn {_p, r} -> r.ref == ref end) do
-      {provider, _r} ->
-        {:noreply, refresh_done(s, provider, {:error, "crashed: #{inspect(reason)}"})}
-
-      nil ->
-        {:noreply, %{s | subscribers: Map.delete(s.subscribers, pid)}}
-    end
-  end
-
-  def handle_info(_msg, s), do: {:noreply, s}
-
-  # ── refresh ──
-
-  # Answers `waiters`: a refreshed sign-in that isn't saved yet is saved
-  # first (or they get the save error); otherwise from what's stored, a
-  # fresh token at once, else they join (or start) the provider's refresh.
-  defp serve(s, provider, waiters) do
-    s = save_unsaved(s, provider)
-
-    case {s.refreshing[provider], s.unsaved[provider], get(provider)} do
-      {%{} = r, _, _} ->
-        put_in(s.refreshing[provider], %{r | waiters: r.waiters ++ waiters})
-
-      {nil, %{reason: reason}, _} ->
-        reply_all(waiters, {:error, {:store_failed, reason}})
-        s
-
-      {nil, nil, :error} ->
-        reply_all(waiters, {:error, :signed_out})
-        s
-
-      {nil, nil, {:ok, creds}} ->
-        if fresh?(creds) do
-          reply_all(waiters, {:ok, token(creds)})
-          s
-        else
-          start_refresh(s, provider, creds, waiters)
-        end
-    end
-  end
-
-  defp start_refresh(s, provider, creds, waiters) do
-    owner = self()
-    opts = if s.respond, do: [respond: s.respond], else: []
-
-    {_pid, ref} =
-      spawn_monitor(fn ->
-        send(owner, {:refreshed, provider, OAuthFlow.refresh(provider, creds, opts)})
-      end)
-
-    put_in(s.refreshing[provider], %{ref: ref, waiters: waiters, superseded: false})
-  end
-
-  defp refresh_done(s, provider, result) do
-    {r, refreshing} = Map.pop(s.refreshing, provider)
-    s = %{s | refreshing: refreshing}
-
-    case {r.superseded, result} do
-      # A newer sign-in (or a sign-out) was saved meanwhile: it wins.
-      {true, _} ->
-        serve(s, provider, r.waiters)
-
-      {false, {:ok, creds}} ->
-        refreshed(s, provider, creds, r.waiters)
-
-      {false, {:error, message}} ->
-        Logger.warning("[auth] #{provider} token refresh failed: #{message}")
-        reply_all(r.waiters, {:error, {:refresh_failed, message}})
-        broadcast(s)
-    end
-  end
-
-  # The old refresh token is spent once the refresh succeeds: the new
-  # credentials are only handed out once saved, and kept here (never
-  # refreshed again from the stored, spent one) until they are.
-  defp refreshed(s, provider, creds, waiters) do
-    s =
-      save_unsaved(
-        put_in(s.unsaved[provider], %{creds: creds, reason: nil, timer: nil}),
-        provider
-      )
-
-    case s.unsaved[provider] do
-      nil ->
-        Logger.info("[auth] #{provider} token refreshed")
-        reply_all(waiters, {:ok, token(creds)})
-        s
-
-      %{reason: reason} ->
-        reply_all(waiters, {:error, {:store_failed, reason}})
-        broadcast(s)
-    end
-  end
-
-  # Saves the provider's unsaved refreshed sign-in, if any; on failure it
-  # stays and a retry is scheduled.
-  defp save_unsaved(s, provider) do
-    case s.unsaved[provider] do
-      nil -> s
-      unsaved -> save_unsaved(s, provider, unsaved)
-    end
-  end
-
-  defp save_unsaved(s, provider, %{creds: creds, timer: timer} = u) do
-    if timer, do: Process.cancel_timer(timer)
-
-    case store(provider, creds) do
-      :ok ->
-        if u.reason, do: Logger.info("[auth] the refreshed #{provider} sign-in is saved now")
-        %{s | unsaved: Map.delete(s.unsaved, provider)}
-
-      {:error, reason} ->
-        Logger.error("[auth] saving the refreshed #{provider} sign-in failed: #{inspect(reason)}")
-        timer = Process.send_after(self(), {:save, provider}, s.save_retry_ms)
-        put_in(s.unsaved[provider], %{u | reason: reason, timer: timer})
-    end
-  end
-
-  # A put or delete was saved: a refresh in flight is stale, and so is a
-  # refreshed sign-in waiting to be saved.
-  defp supersede(s, provider) do
-    s =
-      case s.unsaved[provider] do
-        %{timer: timer} ->
-          if timer, do: Process.cancel_timer(timer)
-          %{s | unsaved: Map.delete(s.unsaved, provider)}
-
-        nil ->
-          s
+  @impl Keeper
+  def refresh(opts, provider, creds) do
+    fn ->
+      case OAuthFlow.refresh(provider, creds, opts) do
+        {:ok, creds} -> {:ok, creds, :refresh}
+        {:error, _} = error -> error
       end
-
-    case s.refreshing[provider] do
-      nil -> s
-      r -> put_in(s.refreshing[provider], %{r | superseded: true})
     end
   end
 
-  defp reply_all(waiters, reply), do: Enum.each(waiters, &GenServer.reply(&1, reply))
-
-  defp broadcast(s) do
-    Enum.each(Map.keys(s.subscribers), &send(&1, {:rho_auth, :changed}))
-    s
-  end
+  @impl Keeper
+  def changed(_opts), do: {:rho_auth, :changed}
 
   # ── helpers ──
-
-  defp store(provider, creds), do: CredentialStore.put(account(provider), Jason.encode!(creds))
 
   defp account(provider), do: "auth:#{provider}"
 
   defp decode(provider, json) do
     case Jason.decode(json) do
-      {:ok, creds} -> if valid?(provider, creds), do: {:ok, creds}, else: :error
+      {:ok, creds} -> if Keeper.valid?(provider, creds), do: {:ok, creds}, else: :error
       {:error, _} -> :error
     end
   end
-
-  defp valid?(provider, %{
-         "type" => "oauth",
-         "access" => access,
-         "refresh" => refresh,
-         "expires" => expires
-       })
-       when provider in @oauth_providers and is_binary(access) and is_binary(refresh) and
-              refresh != "" and is_integer(expires),
-       do: true
-
-  defp valid?(provider, %{"type" => "api_key", "key" => key})
-       when provider in @api_key_providers and is_binary(key) and key != "",
-       do: true
-
-  defp valid?(_provider, _creds), do: false
-
-  defp kind(%{"type" => "api_key"}), do: :api_key
-  defp kind(%{"type" => "oauth"}), do: :oauth
-
-  # An API key never expires.
-  defp fresh?(%{"type" => "api_key"}), do: true
-
-  defp fresh?(%{"access" => access, "expires" => expires}),
-    do: access != "" and expires - System.os_time(:millisecond) > @refresh_margin_ms
-
-  defp token(%{"type" => "api_key", "key" => key}), do: %{type: :api_key, key: key}
-
-  defp token(creds),
-    do: %{type: :oauth, token: creds["access"], account_id: creds["accountId"]}
 end
