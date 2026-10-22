@@ -766,7 +766,8 @@ defmodule Rho.Session do
   request stays inside the provider's limits.
 
   Files whose bytes aren't in the session (pictures attached by reference,
-  PDFs) are fetched by `fetch/2` (given `%{session_id: opts[:session_id]}`)
+  PDFs) are fetched by `fetch/2` (given `%{session_id: opts[:session_id]}`,
+  plus `data_dir: opts[:data_dir]` when that's given)
   before this returns. With `fetch: false` they are left as placeholders
   for the caller to `fetch/2` later, in another process (the loop's model
   call does), or to leave out (a text-only use, as compaction's summary).
@@ -781,16 +782,22 @@ defmodule Rho.Session do
       |> close_dangling_calls()
 
     if Keyword.get(opts, :fetch, true),
-      do: fetch(messages, %{session_id: opts[:session_id]}),
+      do: fetch(messages, fetch_ctx(opts)),
       else: messages
+  end
+
+  defp fetch_ctx(opts) do
+    ctx = %{session_id: opts[:session_id]}
+    if dir = opts[:data_dir], do: Map.put(ctx, :data_dir, dir), else: ctx
   end
 
   @doc """
   Fills in the placeholders `messages(entries, fetch: false)` left for the
   files whose bytes aren't in the session. A picture attached by reference
   comes from the host's `:resolve_attachment` hook
-  (`Rho.Config.resolve_attachment/2`, given `ctx`, `%{session_id: id |
-  nil}`), once per kind and ref; one it can't give becomes the note "(<name>
+  (`Rho.Config.resolve_attachment/2`, given `ctx` unchanged: the loop
+  passes `%{session_id: id}`, plus `data_dir: dir` when it was started
+  with a `:data_dir`), once per kind and ref; one it can't give becomes the note "(<name>
   couldn't be loaded, so it isn't sent.)". PDFs (by path, read from it, or
   by reference, from the hook) go as documents the newest first while the
   request stays inside the provider's limits (20 MB, 100 pages); the

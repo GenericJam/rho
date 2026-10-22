@@ -6,6 +6,18 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-22
+
+### Changed
+
+- **The `:resolve_attachment` hook's `ctx`** carries `data_dir: dir`
+  when the loop was started with a `:data_dir` (a consult: its own
+  `:data_dir` or its loop's; `Rho.Loop.context/1` and
+  `Rho.Session.messages/2`'s `:data_dir` likewise), so a host with
+  several accounts can tell whose conversation a file belongs to when two
+  accounts hold the same session id. Without one, `ctx` is
+  `%{session_id: id}` as before.
+
 ## [0.5.1] - 2026-10-19
 
 The ChatGPT sign-in's models are the ones it accepts.
@@ -292,7 +304,9 @@ can share it.
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
 
-[Unreleased]: https://github.com/GenericJam/rho/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/GenericJam/rho/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/GenericJam/rho/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/GenericJam/rho/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/GenericJam/rho/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/GenericJam/rho/compare/v0.3.0...v0.3.1

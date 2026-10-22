@@ -147,8 +147,9 @@ defmodule Rho.Loop do
   @doc """
   Options: `:session` and `:entries` (from `Rho.Session.new/3` or
   `Rho.Session.open/2`), `:system_prompt`, `:data_dir` (given to tools,
-  and to the model client with each request: where its usage is
-  recorded), `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
+  to the model client with each request: where its usage is recorded,
+  and to the `:resolve_attachment` hook's ctx as `data_dir:`; without it
+  the ctx is only `%{session_id: id}`), `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:withhold_tools` (tool names never offered nor run: `task`
   withholds itself from its subagents), `:before_tool_call` (`fn call,
   ctx -> :allow | {:block, reason} end`), `:keep_details` (`fn tool_name,
@@ -290,8 +291,8 @@ defmodule Rho.Loop do
   """
   @spec context(GenServer.server()) :: [ReqLLM.Message.t()]
   def context(loop) do
-    {messages, session_id} = GenServer.call(loop, :context)
-    Session.fetch(messages, %{session_id: session_id})
+    {messages, ctx} = GenServer.call(loop, :context)
+    Session.fetch(messages, ctx)
   end
 
   @doc """
@@ -393,7 +394,7 @@ defmodule Rho.Loop do
   end
 
   def handle_call(:context, _from, s),
-    do: {:reply, {Session.context(Enum.reverse(s.entries_rev), inputs(s)), s.session.id}, s}
+    do: {:reply, {Session.context(Enum.reverse(s.entries_rev), inputs(s)), fetch_ctx(s)}, s}
 
   def handle_call(:config, _from, s),
     do: {:reply, %{session: s.session, opts: Map.to_list(s.opts)}, s}
@@ -678,6 +679,7 @@ defmodule Rho.Loop do
   defp start_attempt(s, request) do
     {mod, llm_opts} = s.opts.llm
     loop = self()
+    fetch_ctx = fetch_ctx(s)
 
     {pid, ref} =
       spawn_monitor(fn ->
@@ -685,7 +687,7 @@ defmodule Rho.Loop do
         # the files the session holds no bytes of (the host's hook may be slow)
         request = %{
           request
-          | messages: Session.fetch(request.messages, %{session_id: request.session_id})
+          | messages: Session.fetch(request.messages, fetch_ctx)
         }
 
         result = mod.stream(request, llm_opts, &send(loop, {:llm_event, me, &1}))
@@ -1257,6 +1259,13 @@ defmodule Rho.Loop do
   defp pump(s), do: s
 
   defp data_dir(s), do: s.opts[:data_dir] || Rho.Config.data_dir()
+
+  # The `:resolve_attachment` hook's ctx: the session, and the loop's
+  # `:data_dir` only when it was given one (a multi-account host's scope).
+  defp fetch_ctx(s) do
+    ctx = %{session_id: s.session.id}
+    if dir = s.opts[:data_dir], do: Map.put(ctx, :data_dir, dir), else: ctx
+  end
 
   defp tool_done(s, ref, result) do
     %{idx: i, timer: timer} = s.run.batch.running[ref]

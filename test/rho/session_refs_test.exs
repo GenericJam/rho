@@ -380,4 +380,45 @@ defmodule Rho.SessionRefsTest do
     assert text =~ "- IMG_0412.jpg (image/jpeg), ref m-1: 1.2 MB · 3024×4032"
     assert resolved_refs() == []
   end
+
+  test "the hook is told the loop's data dir, to tell accounts with the same session id apart",
+       %{tmp_dir: dir} do
+    resolve_with(%{"m-1" => {:ok, {"image/jpeg", @jpeg}}})
+    %{loop: loop, session: session} = start_loop(dir, [[{:text, "a cat"}]], data_dir: dir)
+
+    :ok = Loop.prompt(loop, "what's this?", [photo("m-1")])
+    collect()
+
+    sid = session.id
+    assert_received {:resolved, "m-1", %{session_id: ^sid, data_dir: ^dir}}
+
+    Loop.context(loop)
+    assert_received {:resolved, "m-1", %{session_id: ^sid, data_dir: ^dir}}
+  end
+
+  test "a consult tells the hook its loop's data dir; without one, no data_dir key",
+       %{tmp_dir: dir} do
+    resolve_with(%{"m-1" => {:ok, {"image/jpeg", @jpeg}}})
+    %{loop: loop, session: session} = start_loop(dir, [[{:text, "a cat"}]], data_dir: dir)
+
+    assert {:ok, _} =
+             Rho.Consult.run("google:gemini-3.1-pro-preview", "what's this?",
+               loop: loop,
+               attachments: [photo("m-1")]
+             )
+
+    sid = session.id
+    assert_received {:resolved, "m-1", %{session_id: ^sid, data_dir: ^dir}}
+
+    {:ok, llm} = FakeLLM.start([[{:text, "a cat"}]])
+
+    assert {:ok, _} =
+             Rho.Consult.run("google:gemini-3.1-pro-preview", "what's this?",
+               llm: {FakeLLM, llm},
+               attachments: [photo("m-1")]
+             )
+
+    assert_received {:resolved, "m-1", ctx}
+    assert ctx == %{session_id: nil}
+  end
 end
