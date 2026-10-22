@@ -46,7 +46,11 @@ defmodule Rho.Config do
       MFA taking those two last. `attachment` is the stored map
       (`Rho.Session.attachments/1`: `"kind"`, `"ref"`, `"mimeType"`,
       `"name"`, ...), `ctx` is `%{session_id: id}` (the loop's session; nil
-      when a host builds the context itself without one). It returns
+      when a host builds the context itself without one), plus
+      `data_dir: dir` when the loop (or a consult, from its own option or
+      its loop's) was started with a `:data_dir`, so a multi-account host
+      can tell whose conversation it is when session ids collide; without
+      one the key is absent. It returns
       `{:ok, {mime_type, bytes}}`, ready for the model (any resizing is the
       host's), or `{:error, reason}`. It is called for referenced pictures
       when the model takes pictures and PDFs when it takes PDFs, once per
@@ -138,7 +142,7 @@ defmodule Rho.Config do
   @doc """
   The bytes of a file attached by reference, from the `:resolve_attachment`
   hook (`{:error, :no_resolver}` without one). `ctx` is
-  `%{session_id: id | nil}`.
+  `%{session_id: id | nil}`, with `:data_dir` when the loop was given one.
   """
   @spec resolve_attachment(map(), map()) :: {:ok, {String.t(), binary()}} | {:error, term()}
   def resolve_attachment(attachment, ctx) do

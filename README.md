@@ -171,7 +171,7 @@ them all):
 | `:namespace` (`customType` of the loop's notices in a session) | `"rho"` | |
 | `:app_name`, `:hints` (where the user signs in or switches model, in messages; how they approve a Dyn generation, in the agent's Dyn text) | "the app", "the app's settings", "on the phone with the screen lock" | |
 | Attachments (`t:Rho.Session.attachment/0`: pictures, text, PDFs with a user message) | none: the host builds them from its pickers and camera | |
-| `:resolve_attachment` (`fn attachment, ctx -> {:ok, {mime, bytes}} \| {:error, reason} end` or an MFA): the bytes of a file attached by reference (`ref:` in an attachment, or a tool's `%{ref: …}` picture), whose session entry keeps only the ref and metadata | none: a referenced file reaches the model as a note | the app's materials store |
+| `:resolve_attachment` (`fn attachment, ctx -> {:ok, {mime, bytes}} \| {:error, reason} end` or an MFA): the bytes of a file attached by reference (`ref:` in an attachment, or a tool's `%{ref: …}` picture), whose session entry keeps only the ref and metadata; `ctx` is `%{session_id: id}`, plus `data_dir:` when the loop was started with a `:data_dir` | none: a referenced file reaches the model as a note | the app's materials store |
 | Loop options (`Rho.Loop.start_link/1`): gate before each tool call, budget, guards, model client, `:data_dir` (where its usage is recorded and read) | allow all; no cap; pi's limits; `Rho.LLM.ReqLLM`; `:data_dir` | |
 | Whose sign-ins a loop uses: `llm: {Rho.LLM.ReqLLM, credential: fun, status: fun}` (as `Rho.Auth.credential/1` and `status/0` answer), read by its model calls, compaction, consults, `ask_model` and the fallback check | the node's (`Rho.Auth`) | |
 | `:consult_models` (a list of specs, or a function / MFA returning one): the models `Rho.Consult` and `ask_model` may consult | every catalog model of a signed-in provider | the app's settings |
@@ -214,6 +214,10 @@ Rho.start_loop(
      status: fn -> Rho.Auth.Vault.status(vault) end}
 )
 ```
+
+The `:resolve_attachment` hook then gets `data_dir: account_dir` in its
+`ctx` with each file the loop (or a consult on it) fetches, so it reads
+the right account's store even when two accounts hold the same session id.
 
 `Rho.Session.size/1`, `read_from/3` and `append_bytes/3` keep a copy of
 a session file in step by byte offset (whole lines, idempotent on a

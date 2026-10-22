@@ -248,13 +248,16 @@ defmodule Rho.Consult do
     loop_opts = if joined, do: joined.opts, else: %{}
     pick = fn key, default -> opts[key] || loop_opts[key] || default end
 
+    explicit_dir = pick.(:data_dir, nil)
+
     Map.merge(info, %{
       loop: joined && joined.loop,
       loop_ref: joined && joined.ref,
       session_id: joined && joined.session.id,
       llm: pick.(:llm, {LLM.ReqLLM, []}),
       budget: pick.(:budget, nil),
-      data_dir: pick.(:data_dir, nil) || Rho.Config.data_dir(),
+      data_dir: explicit_dir || Rho.Config.data_dir(),
+      fetch_ctx: fetch_ctx(joined && joined.session.id, explicit_dir),
       task_supervisor: pick.(:task_supervisor, Rho.TaskSup),
       gate: pick.(:before_tool_call, &ToolRunner.allow_all/2),
       system: system(opts[:system], info.purpose),
@@ -263,6 +266,10 @@ defmodule Rho.Consult do
       max_tokens: opts[:max_tokens]
     })
   end
+
+  # The `:resolve_attachment` hook's ctx: `:data_dir` only when given one.
+  defp fetch_ctx(session_id, nil), do: %{session_id: session_id}
+  defp fetch_ctx(session_id, dir), do: %{session_id: session_id, data_dir: dir}
 
   defp system(nil, purpose),
     do: Rho.Config.consult_system(purpose) || default_system(purpose)
@@ -468,7 +475,7 @@ defmodule Rho.Consult do
           spawn_link(fn ->
             request = %{
               request
-              | messages: Session.fetch(request.messages, %{session_id: c.session_id})
+              | messages: Session.fetch(request.messages, c.fetch_ctx)
             }
 
             result = mod.stream(request, llm_opts, &send(reply, {:consult_llm, worker, &1}))

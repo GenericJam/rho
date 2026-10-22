@@ -6,6 +6,16 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The `:resolve_attachment` hook's `ctx`** carries `data_dir: dir`
+  when the loop was started with a `:data_dir` (a consult: its own
+  `:data_dir` or its loop's; `Rho.Loop.context/1` and
+  `Rho.Session.messages/2`'s `:data_dir` likewise), so a host with
+  several accounts can tell whose conversation a file belongs to when two
+  accounts hold the same session id. Without one, `ctx` is
+  `%{session_id: id}` as before.
+
 ## [0.5.1] - 2026-10-19
 
 The ChatGPT sign-in's models are the ones it accepts.
