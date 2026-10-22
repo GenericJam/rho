@@ -2,7 +2,7 @@ defmodule Rho.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/GenericJam/rho"
-  @version "0.5.2"
+  @version "0.5.3"
 
   def project do
     [
@@ -35,7 +35,7 @@ defmodule Rho.MixProject do
 
   defp deps do
     [
-      {:req_llm, "~> 1.26"},
+      {:req_llm, "~> 1.29"},
       {:req, "~> 0.7"},
       {:finch, "~> 0.24"},
       {:jason, "~> 1.4"},
