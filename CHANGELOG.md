@@ -6,6 +6,19 @@ All notable changes to rho are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-22
+
+### Security
+
+- **req_llm `~> 1.29`** (was `~> 1.26`): req_llm 1.9.0 through 1.28.0 did
+  not verify TLS certificates on `wss://` WebSocket sessions (OpenAI
+  Responses, Realtime and Codex WebSocket modes), exposing the API key or
+  OAuth token to an on-path attacker
+  ([GHSA-6vww-5m28-f26v](https://github.com/agentjido/req_llm/security/advisories/GHSA-6vww-5m28-f26v)).
+  rho never selects those transports (streaming stays on SSE over Finch,
+  which verifies certificates), so rho was not exposed; the bump keeps
+  hosts from resolving an affected req_llm.
+
 ## [0.5.2] - 2026-10-22
 
 ### Changed
@@ -304,7 +317,8 @@ can share it.
   modules, children started under trusted supervisors, `:alarm_handler`,
   resource floods) are listed in `Rho.Dyn.Check` and the README.
 
-[Unreleased]: https://github.com/GenericJam/rho/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/GenericJam/rho/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/GenericJam/rho/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/GenericJam/rho/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/GenericJam/rho/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/GenericJam/rho/compare/v0.4.0...v0.5.0
